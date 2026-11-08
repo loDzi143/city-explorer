@@ -1,15 +1,27 @@
 import { z } from "zod"
 
-const mapTilerKeySchema = z.string().trim().min(1)
-const geocodingUrlSchema = z.url()
+const envSchema = z.object({
+  MAPTILER_KEY: z.string().trim().min(1).nullable().catch(null),
+  GEOCODING_URL: z
+    .string()
+    .trim()
+    .transform((value) => value.replace(/\/+$/, ""))
+    .pipe(z.url())
+    .nullable()
+    .catch(null),
+  OPENROUTER_API_KEY: z.string().trim().min(1).nullable().catch(null),
+  OPENROUTER_MODEL: z.string().trim().min(1).nullable().catch(null),
+  OPENROUTER_COMPLETIONS_URL: z
+    .string()
+    .trim()
+    .transform((value) => value.replace(/\/+$/, ""))
+    .pipe(z.url())
+    .nullable()
+    .catch(null),
+})
 
-export function readMapTilerKey(): string | null {
-  const parsed = mapTilerKeySchema.safeParse(process.env.MAPTILER_KEY)
-  return parsed.success ? parsed.data : null
-}
+export type Env = z.infer<typeof envSchema>
 
-export function readGeocodingUrl(): string | null {
-  const value = process.env.GEOCODING_URL?.trim().replace(/\/+$/, "")
-  const parsed = geocodingUrlSchema.safeParse(value)
-  return parsed.success ? parsed.data : null
+export function readEnv(): Env {
+  return envSchema.parse(process.env)
 }

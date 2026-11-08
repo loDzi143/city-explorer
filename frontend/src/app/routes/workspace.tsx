@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { ChatI, Chev, Compass, MapI } from "@/components/icons"
 import { ChatView, Sidebar, TripForm } from "@/features/trips"
@@ -26,6 +26,11 @@ export function WorkspacePage() {
   const deleteChat = useChatStore((state) => state.deleteChat)
   const saveTrip = useChatStore((state) => state.saveTrip)
   const sendMessage = useChatStore((state) => state.sendMessage)
+  const beginItinerary = useChatStore((state) => state.beginItinerary)
+  const finishItinerary = useChatStore((state) => state.finishItinerary)
+  const failItinerary = useChatStore((state) => state.failItinerary)
+  const pendingItineraryIds = useChatStore((state) => state.pendingItineraryIds)
+  const failedItineraryIds = useChatStore((state) => state.failedItineraryIds)
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => window.innerWidth < 1100)
   const [chatCollapsed, setChatCollapsed] = useState(false)
@@ -36,6 +41,16 @@ export function WorkspacePage() {
 
   const t = tr(lang)
   const chat = chats.find((item) => item.id === activeId) ?? null
+  const beginActiveItinerary = useCallback(() => (chat ? beginItinerary(chat.id) : false), [beginItinerary, chat])
+  const finishActiveItinerary = useCallback(
+    (text: string) => {
+      if (chat) finishItinerary(chat.id, text)
+    },
+    [chat, finishItinerary],
+  )
+  const failActiveItinerary = useCallback(() => {
+    if (chat) failItinerary(chat.id)
+  }, [chat, failItinerary])
   const place = useMemo(() => (chat ? tripPlace(chat) : null), [chat])
   const showForm = Boolean(chat && (chat.messages === null || editing))
   const mapFocus = useMemo(
@@ -153,7 +168,19 @@ export function WorkspacePage() {
                 }}
               />
             ) : chat ? (
-              <ChatView key={chat.id} chat={chat} t={t} lang={lang} onSend={(text) => sendMessage(chat.id, text)} onEdit={() => setEditing(true)} />
+              <ChatView
+                key={chat.id}
+                chat={chat}
+                t={t}
+                lang={lang}
+                onSend={(text) => sendMessage(chat.id, text)}
+                onEdit={() => setEditing(true)}
+                itineraryPending={pendingItineraryIds.includes(chat.id)}
+                itineraryFailed={failedItineraryIds.includes(chat.id)}
+                onBeginItinerary={beginActiveItinerary}
+                onItinerary={finishActiveItinerary}
+                onItineraryError={failActiveItinerary}
+              />
             ) : (
               <div className="flex h-full items-center justify-center overflow-y-auto px-4 py-6 md:px-6 md:py-8">
                 <div className="w-full max-w-[520px] text-center">

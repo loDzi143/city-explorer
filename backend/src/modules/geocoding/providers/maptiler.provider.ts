@@ -1,4 +1,4 @@
-import { readGeocodingUrl, readMapTilerKey } from "@/config/env"
+import { readEnv } from "@/config/env"
 import { AppError } from "@/shared/errors/app-error"
 import type { GeocodingProvider } from "@/modules/geocoding/providers/geocoding.provider"
 import type { LocationSuggestion } from "@/modules/geocoding/geocoding.types"
@@ -18,8 +18,7 @@ const MUNICIPAL_TYPES = new Set(["municipality", "joint_municipality", "municipa
 
 export const mapTilerProvider: GeocodingProvider = {
   async suggest(search) {
-    const key = readMapTilerKey()
-    const geocodingUrl = readGeocodingUrl()
+    const { MAPTILER_KEY: key, GEOCODING_URL: geocodingUrl } = readEnv()
     if (!key) {
       throw new AppError("MAPTILER_KEY is not configured", 502, "Geocoding is unavailable")
     }

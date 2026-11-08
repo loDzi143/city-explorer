@@ -20,18 +20,16 @@ type ChatState = {
   deleteChat: (id: string) => void
   saveTrip: (id: string, value: TripDetails) => void
   sendMessage: (id: string, text: string) => void
-  appendAiReply: (id: string) => void
+  pendingItineraryIds: string[]
+  failedItineraryIds: string[]
+  beginItinerary: (id: string) => boolean
+  finishItinerary: (id: string, text: string) => void
+  failItinerary: (id: string) => void
 }
 
 type PersistedChatState = Pick<ChatState, "lang" | "dark" | "chats" | "activeId">
 
-const AI_REPLY: Record<Lang, string> = {
-  en: "AI answer",
-  ru: "AI ответ",
-}
-
-const AI_REPLY_DELAY_MS = 800
-const recoveredChatIds = new Set<string>()
+const repliesInFlight = new Set<string>()
 
 function prefersDark() {
   return typeof window !== "undefined" && window.matchMedia("(prefers-color-scheme: dark)").matches
@@ -65,25 +63,9 @@ function parseChat(value: unknown): Chat | null {
   return { ...chat, place: isPlace(chat.place) ? chat.place : null }
 }
 
-function scheduleAiReply(chatId: string) {
-  window.setTimeout(() => {
-    useChatStore.getState().appendAiReply(chatId)
-  }, AI_REPLY_DELAY_MS)
-}
-
-function recoverPendingReplies(chats: Chat[]) {
-  for (const chat of chats) {
-    if (recoveredChatIds.has(chat.id)) continue
-    const messages = chat.messages
-    if (!messages?.length || messages[messages.length - 1]?.role !== "user") continue
-    recoveredChatIds.add(chat.id)
-    let pending = 0
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
-      if (messages[index]?.role !== "user") break
-      pending += 1
-    }
-    for (let count = 0; count < pending; count += 1) scheduleAiReply(chat.id)
-  }
+function needsReply(messages: ChatMessage[]) {
+  if (messages.length === 0) return true
+  return messages[messages.length - 1]?.role === "user"
 }
 
 export function chatTitle(chat: Chat, t: { untitled: string }) {
@@ -95,12 +77,14 @@ export function chatTitle(chat: Chat, t: { untitled: string }) {
 
 export const useChatStore = create<ChatState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       hasHydrated: false,
       lang: "en",
       dark: prefersDark(),
       chats: [],
       activeId: null,
+      pendingItineraryIds: [],
+      failedItineraryIds: [],
       setHasHydrated: (hasHydrated) => set({ hasHydrated }),
       setLang: (lang) => set({ lang }),
       setDark: (dark) => set({ dark }),
@@ -150,20 +134,40 @@ export const useChatStore = create<ChatState>()(
             chat.id === id ? { ...chat, messages: [...(chat.messages ?? []), message] } : chat,
           ),
         }))
-        scheduleAiReply(id)
       },
-      appendAiReply: (id) =>
+      beginItinerary: (id) => {
+        const chat = get().chats.find((item) => item.id === id)
+        if (!chat || chat.messages === null || !needsReply(chat.messages) || repliesInFlight.has(id)) return false
+        repliesInFlight.add(id)
         set((state) => ({
+          pendingItineraryIds: state.pendingItineraryIds.includes(id) ? state.pendingItineraryIds : [...state.pendingItineraryIds, id],
+          failedItineraryIds: state.failedItineraryIds.filter((item) => item !== id),
+        }))
+        return true
+      },
+      finishItinerary: (id, text) => {
+        repliesInFlight.delete(id)
+        const reply: ChatMessage = {
+          id: crypto.randomUUID(),
+          role: "ai",
+          text: { en: text, ru: text },
+        }
+        set((state) => ({
+          pendingItineraryIds: state.pendingItineraryIds.filter((item) => item !== id),
+          failedItineraryIds: state.failedItineraryIds.filter((item) => item !== id),
           chats: state.chats.map((chat) => {
             if (chat.id !== id || chat.messages === null) return chat
-            const reply: ChatMessage = {
-              id: crypto.randomUUID(),
-              role: "ai",
-              text: AI_REPLY,
-            }
             return { ...chat, messages: [...chat.messages, reply] }
           }),
-        })),
+        }))
+      },
+      failItinerary: (id) => {
+        repliesInFlight.delete(id)
+        set((state) => ({
+          pendingItineraryIds: state.pendingItineraryIds.filter((item) => item !== id),
+          failedItineraryIds: state.failedItineraryIds.includes(id) ? state.failedItineraryIds : [...state.failedItineraryIds, id],
+        }))
+      },
     }),
     {
       name: "city-explorer-chats",
@@ -194,7 +198,6 @@ export const useChatStore = create<ChatState>()(
         }
         document.documentElement.classList.toggle("dark", state.dark)
         document.documentElement.lang = state.lang
-        recoverPendingReplies(state.chats)
         state.setHasHydrated(true)
       },
     },
