@@ -1,10 +1,10 @@
 import { readEnv } from "@/config/env"
-import type { ChatCompletion, ChatMessage, LlmUsage } from "@/modules/ai/llm/chat.types"
+import type { ChatCompletion, LlmUsage, ModelMessage, ToolCall, ToolDefinition } from "@/modules/ai/llm/chat.types"
 import type { ChatProvider } from "@/modules/ai/llm/providers/chat.provider"
 import { AppError } from "@/shared/errors/app-error"
 
 export const openRouterProvider: ChatProvider = {
-  async complete(messages: ChatMessage[]): Promise<ChatCompletion> {
+  async complete(messages: ModelMessage[], tools: ToolDefinition[] = []): Promise<ChatCompletion> {
     const {
       OPENROUTER_API_KEY: key,
       OPENROUTER_MODEL: model,
@@ -30,7 +30,8 @@ export const openRouterProvider: ChatProvider = {
         },
         body: JSON.stringify({
           model,
-          messages,
+          messages: messages.map(toApiMessage),
+          ...(tools.length > 0 ? { tools: tools.map(toApiTool), tool_choice: "auto" } : {}),
         }),
         cache: "no-store",
         signal: AbortSignal.timeout(60_000),
@@ -55,12 +56,57 @@ export const openRouterProvider: ChatProvider = {
       throw new AppError("OpenRouter response is invalid", 502, "LLM is unavailable")
     }
 
-    const content = completionText(payload)
-    if (!content) {
+    const message = completionMessage(payload)
+    if (!message) {
       throw new AppError("OpenRouter response is empty", 502, "LLM is unavailable")
     }
-    return { content, usage: completionUsage(payload) }
+    const content = textContent(message.content)
+    const toolCalls = toolCallsOf(message)
+    if (!content && toolCalls.length === 0) {
+      throw new AppError("OpenRouter response is empty", 502, "LLM is unavailable")
+    }
+    return { content, toolCalls, usage: completionUsage(payload) }
   },
+}
+
+function toApiMessage(message: ModelMessage) {
+  if (message.role === "tool") {
+    return {
+      role: "tool",
+      tool_call_id: message.toolCallId,
+      name: message.name,
+      content: message.content,
+    }
+  }
+  if (message.role === "assistant" && message.toolCalls?.length) {
+    return {
+      role: "assistant",
+      content: message.content,
+      tool_calls: message.toolCalls.map((call) => ({
+        id: call.id,
+        type: "function",
+        function: {
+          name: call.name,
+          arguments: call.arguments,
+        },
+      })),
+    }
+  }
+  return {
+    role: message.role,
+    content: message.content ?? "",
+  }
+}
+
+function toApiTool(tool: ToolDefinition) {
+  return {
+    type: "function",
+    function: {
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters,
+    },
+  }
 }
 
 function isTimeoutError(error: unknown): boolean {
@@ -102,11 +148,34 @@ function finiteNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null
 }
 
-function completionText(payload: unknown): string | null {
+function completionMessage(payload: unknown): Record<string, unknown> | null {
   if (!isRecord(payload) || !Array.isArray(payload.choices)) return null
   const choice = payload.choices[0]
   if (!isRecord(choice) || !isRecord(choice.message)) return null
-  return textContent(choice.message.content)
+  return choice.message
+}
+
+function toolCallsOf(message: Record<string, unknown>): ToolCall[] {
+  if (!Array.isArray(message.tool_calls)) return []
+  return message.tool_calls.flatMap((call, index) => {
+    const parsed = toolCallOf(call, index)
+    return parsed ? [parsed] : []
+  })
+}
+
+function toolCallOf(call: unknown, index: number): ToolCall | null {
+  if (!isRecord(call)) return null
+  const fn = isRecord(call.function) ? call.function : call
+  const name = textField(fn.name) || textField(call.name)
+  if (!name) return null
+  const id = textField(call.id) || `call_${index}`
+  const raw = "arguments" in fn ? fn.arguments : call.arguments
+  const args = typeof raw === "string" ? raw : isRecord(raw) || Array.isArray(raw) ? JSON.stringify(raw) : ""
+  return { id, name, arguments: args }
+}
+
+function textField(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : ""
 }
 
 function textContent(content: unknown): string | null {

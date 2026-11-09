@@ -182,3 +182,18 @@
     max-width: none;
   }
 }
+
+.ce-place-popup {
+  z-index: 3;
+}
+.ce-place-popup .maplibregl-popup-content {
+  background: var(--ce-panel) !important;
+  color: var(--ce-ink);
+  border: 1px solid var(--ce-line) !important;
+  border-radius: 12px !important;
+  padding: 0 !important;
+  box-shadow: 0 12px 32px rgb(16 18 22 / 16%) !important;
+}
+.ce-place-popup .maplibregl-popup-tip {
+  display: none !important;
+}

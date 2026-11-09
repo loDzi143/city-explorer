@@ -1,5 +1,5 @@
 import type { Language } from "@/shared/types/language"
-import type { LocationSuggestion } from "@/modules/geocoding/geocoding.types"
+import type { GeocodePlacesQuery, LocationSuggestion, PlaceCandidate } from "@/modules/geocoding/geocoding.types"
 
 export type GeocodingSearch = {
   query: string
@@ -9,4 +9,5 @@ export type GeocodingSearch = {
 
 export interface GeocodingProvider {
   suggest(search: GeocodingSearch): Promise<LocationSuggestion[]>
+  geocodePlaces(query: GeocodePlacesQuery): Promise<PlaceCandidate[][]>
 }

@@ -1,17 +1,19 @@
 import { z } from "zod"
 
-import { chatRoles, type ChatCompletion, type ChatLlmInput } from "@/modules/ai/llm/chat.types"
+import { chatRoles, type ChatCompletion } from "@/modules/ai/llm/chat.types"
 
 const chatMessageSchema = z.object({
   role: z.enum(chatRoles),
   content: z.string().trim().min(1).max(20_000),
 })
 
-export const chatLlmBodySchema = z
-  .object({
-    messages: z.array(chatMessageSchema).min(1).max(100),
-  })
-  .refine((value) => value.messages[0]?.role === "system")
+export const chatMessagesSchema = z.array(chatMessageSchema).min(1).max(100)
+
+const toolCallSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  arguments: z.string(),
+})
 
 const llmUsageSchema = z.object({
   promptTokens: z.number().finite().nonnegative(),
@@ -19,23 +21,23 @@ const llmUsageSchema = z.object({
   totalTokens: z.number().finite().nonnegative(),
 })
 
-export const chatCompletionSchema = z.object({
-  content: z.string().trim().min(1),
-  usage: llmUsageSchema.optional(),
-})
+export function parseChatCompletion(payload: {
+  content: string | null
+  toolCalls: unknown
+  usage?: unknown
+}): ChatCompletion | null {
+  const toolCalls = z.array(toolCallSchema).safeParse(payload.toolCalls)
+  if (!toolCalls.success) return null
 
-export function parseChatLlmBody(payload: unknown): { ok: true; data: ChatLlmInput } | { ok: false; error: string } {
-  const result = chatLlmBodySchema.safeParse(payload)
-  if (!result.success) {
-    const tooLong = result.error.issues.some((issue) => issue.code === "too_big")
-    return { ok: false, error: tooLong ? "Message is too long" : "Message is required" }
+  let text: string | null = null
+  if (payload.content !== null) {
+    const content = z.string().trim().min(1).safeParse(payload.content)
+    if (!content.success) return null
+    text = content.data
   }
-  return { ok: true, data: result.data }
-}
-
-export function parseChatCompletion(payload: { content: string; usage?: unknown }): ChatCompletion | null {
-  const content = z.string().trim().min(1).safeParse(payload.content)
-  if (!content.success) return null
+  if (!text && toolCalls.data.length === 0) return null
   const usage = llmUsageSchema.safeParse(payload.usage)
-  return usage.success ? { content: content.data, usage: usage.data } : { content: content.data }
+  return usage.success
+    ? { content: text, toolCalls: toolCalls.data, usage: usage.data }
+    : { content: text, toolCalls: toolCalls.data }
 }

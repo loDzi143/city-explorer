@@ -7,6 +7,19 @@ export type ChatMessage = {
   text: Record<Lang, string>
 }
 
+export type TripDay = {
+  date: string
+  places: {
+    id: string
+    name: string
+    description: string
+    coordinates: {
+      latitude: number
+      longitude: number
+    }
+  }[]
+}
+
 export type Chat = {
   id: string
   cityId: string | null
@@ -16,6 +29,7 @@ export type Chat = {
   hotel: string
   prefs: string
   messages: ChatMessage[] | null
+  tripDays: TripDay[]
   name?: string
 }
 

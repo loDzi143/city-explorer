@@ -1,7 +1,7 @@
 import { create } from "zustand"
 import { persist } from "zustand/middleware"
 
-import type { Chat, ChatMessage, TripDetails } from "@/types/chat"
+import type { Chat, ChatMessage, TripDay, TripDetails } from "@/types/chat"
 import type { Lang } from "@/types/lang"
 import { isPlace, tripPlace } from "@/utils/place"
 
@@ -60,7 +60,65 @@ function parseChat(value: unknown): Chat | null {
     (chat.name === undefined || typeof chat.name === "string") &&
     messagesOk
   if (!valid) return null
-  return { ...chat, place: isPlace(chat.place) ? chat.place : null }
+  return {
+    ...chat,
+    place: isPlace(chat.place) ? chat.place : null,
+    tripDays: readTripDays(chat.tripDays),
+  }
+}
+
+function readTripDays(value: unknown): TripDay[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((item) => {
+    const day = readTripDay(item)
+    return day ? [day] : []
+  })
+}
+
+function readTripDay(value: unknown): TripDay | null {
+  if (!value || typeof value !== "object") return null
+  const day = value as TripDay
+  const date = typeof day.date === "string" ? day.date.trim() : ""
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null
+  return { date, places: readTripDayPlaces(day.places) }
+}
+
+function readTripDayPlaces(value: unknown): TripDay["places"] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((item) => {
+    const place = readTripDayPlace(item)
+    return place ? [place] : []
+  })
+}
+
+function readTripDayPlace(value: unknown): TripDay["places"][number] | null {
+  if (!value || typeof value !== "object") return null
+  const place = value as TripDay["places"][number]
+  const latitude = place.coordinates?.latitude
+  const longitude = place.coordinates?.longitude
+  const id = typeof place.id === "string" ? place.id.trim() : ""
+  const name = typeof place.name === "string" ? place.name.trim() : ""
+  if (!id || !name) return null
+  if (typeof place.description !== "string") return null
+  if (typeof latitude !== "number" || !Number.isFinite(latitude)) return null
+  if (typeof longitude !== "number" || !Number.isFinite(longitude)) return null
+  return {
+    id,
+    name,
+    description: place.description,
+    coordinates: { latitude, longitude },
+  }
+}
+
+function daysFromReply(text: string): TripDay[] {
+  let payload: unknown
+  try {
+    payload = JSON.parse(text)
+  } catch {
+    return []
+  }
+  if (!payload || typeof payload !== "object" || !("days" in payload)) return []
+  return readTripDays(payload.days)
 }
 
 function needsReply(messages: ChatMessage[]) {
@@ -98,6 +156,7 @@ export const useChatStore = create<ChatState>()(
           hotel: "",
           prefs: "",
           messages: null,
+          tripDays: [],
         }
         set((state) => ({ chats: [chat, ...state.chats], activeId: chat.id }))
       },
@@ -152,12 +211,17 @@ export const useChatStore = create<ChatState>()(
           role: "ai",
           text: { en: text, ru: text },
         }
+        const incoming = daysFromReply(text)
         set((state) => ({
           pendingItineraryIds: state.pendingItineraryIds.filter((item) => item !== id),
           failedItineraryIds: state.failedItineraryIds.filter((item) => item !== id),
           chats: state.chats.map((chat) => {
             if (chat.id !== id || chat.messages === null) return chat
-            return { ...chat, messages: [...chat.messages, reply] }
+            return {
+              ...chat,
+              messages: [...chat.messages, reply],
+              tripDays: incoming.length > 0 ? incoming : chat.tripDays,
+            }
           }),
         }))
       },

@@ -8,6 +8,7 @@ import { rangeLabel } from "@/utils/dates"
 import { tripPlace } from "@/utils/place"
 
 import { useChatReply } from "../hooks/use-chat-reply"
+import { assistantMessage } from "../utils/assistant-message"
 import { MarkdownMessage } from "./markdown-message"
 
 function AiMessage({ children }: { children: ReactNode }) {
@@ -113,7 +114,7 @@ export function ChatView({
             </div>
           ) : (
             <AiMessage key={message.id}>
-              <MarkdownMessage text={message.text[lang]} />
+              <MarkdownMessage text={assistantMessage(message.text[lang])} />
             </AiMessage>
           ),
         )}

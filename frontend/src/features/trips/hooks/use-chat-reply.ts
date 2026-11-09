@@ -29,7 +29,19 @@ export function useChatReply({
   onError: () => void
 }) {
   const send = useCallback(() => {
-    chatLlm(chatHistory(chat, lang)).then(onFinish).catch(onError)
+    const place = chat.place
+    if (!place) {
+      onError()
+      return
+    }
+    chatLlm(chatHistory(chat, lang), {
+      city: place.city,
+      country: place.country,
+      latitude: place.latitude,
+      longitude: place.longitude,
+    })
+      .then((reply) => onFinish(JSON.stringify(reply)))
+      .catch(onError)
   }, [chat, lang, onFinish, onError])
 
   useEffect(() => {

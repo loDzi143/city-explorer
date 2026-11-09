@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { ChatI, Chev, Compass, MapI } from "@/components/icons"
 import { ChatView, Sidebar, TripForm } from "@/features/trips"
-import { MapView } from "@/features/map"
+import { MapDaySelect, MapView } from "@/features/map"
 import { useMediaQuery } from "@/hooks/use-media-query"
 import { tr } from "@/lib/i18n"
 import { chatTitle, useChatStore } from "@/stores/chat-store"
@@ -60,6 +60,35 @@ export function WorkspacePage() {
         : null,
     [chat?.messages, place],
   )
+  const tripDays = chat?.tripDays
+  const [pickedDay, setPickedDay] = useState<{ chatId: string; date: string } | null>(null)
+  const selectedDate =
+    chat && tripDays && pickedDay?.chatId === chat.id && tripDays.some((day) => day.date === pickedDay.date)
+      ? pickedDay.date
+      : (tripDays?.[0]?.date ?? "")
+  const mapStops = useMemo(() => {
+    const day = tripDays?.find((item) => item.date === selectedDate)
+    if (!day) return []
+    return day.places.map((stop) => ({
+      id: stop.id,
+      name: stop.name,
+      description: stop.description,
+      longitude: stop.coordinates.longitude,
+      latitude: stop.coordinates.latitude,
+    }))
+  }, [tripDays, selectedDate])
+  const daySelect =
+    tripDays && tripDays.length > 0 ? (
+      <MapDaySelect
+        dates={tripDays.map((day) => day.date)}
+        value={selectedDate}
+        onChange={(date) => {
+          if (chat) setPickedDay({ chatId: chat.id, date })
+        }}
+        lang={lang}
+        t={t}
+      />
+    ) : null
 
   useEffect(() => {
     if (!hydrated || chats.length === 0) return
@@ -206,30 +235,33 @@ export function WorkspacePage() {
           aria-hidden={!showMap}
           className={`relative h-full min-h-0 min-w-0 overflow-hidden ${showMap ? "flex-1" : "hidden"} ${mobile ? "w-full" : "rounded-2xl border border-line shadow-sm"}`}
         >
-          <MapView dark={dark} t={t} focus={mapFocus} frameOffset={mobile ? 0 : undefined} />
-          {mobile ? (
-            showMap && (
-              <button
-                type="button"
-                onClick={() => setMobilePane("chat")}
-                aria-label={t.expandChat}
-                title={t.expandChat}
-                className="absolute left-4 top-4 z-10 grid size-9 place-items-center rounded-xl border border-line bg-panel text-ink shadow-sm transition hover:bg-hover"
-              >
-                <ChatI />
-              </button>
-            )
+          <MapView dark={dark} t={t} focus={mapFocus} day={selectedDate} stops={mapStops} frameOffset={mobile ? 0 : undefined} />
+          {(mobile ? showMap : chatCollapsed) ? (
+            <div className="absolute top-4 left-4 z-10 flex items-center gap-2">
+              {mobile ? (
+                <button
+                  type="button"
+                  onClick={() => setMobilePane("chat")}
+                  aria-label={t.expandChat}
+                  title={t.expandChat}
+                  className="grid size-9 shrink-0 place-items-center rounded-xl border border-line bg-panel text-ink shadow-sm transition hover:bg-hover"
+                >
+                  <ChatI />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setChatCollapsed(false)}
+                  className="flex h-9 shrink-0 items-center gap-2 rounded-xl border border-line bg-panel px-3 text-[13px] font-medium shadow-sm transition hover:bg-hover"
+                >
+                  <ChatI />
+                  {t.expandChat}
+                </button>
+              )}
+              {daySelect}
+            </div>
           ) : (
-            chatCollapsed && (
-              <button
-                type="button"
-                onClick={() => setChatCollapsed(false)}
-                className="absolute left-4 top-4 z-10 flex h-9 items-center gap-2 rounded-xl border border-line bg-panel px-3 text-[13px] font-medium shadow-sm transition hover:bg-hover"
-              >
-                <ChatI />
-                {t.expandChat}
-              </button>
-            )
+            daySelect && <div className="absolute top-4 left-4 z-10">{daySelect}</div>
           )}
         </section>
       </main>

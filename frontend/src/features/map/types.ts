@@ -4,3 +4,11 @@ export type MapFocus = {
   latitude: number
   bbox: [number, number, number, number] | null
 }
+
+export type MapStop = {
+  id: string
+  name: string
+  description: string
+  longitude: number
+  latitude: number
+}

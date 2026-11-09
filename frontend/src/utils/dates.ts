@@ -1,4 +1,7 @@
 import type { Dict } from "@/lib/i18n"
+import type { Lang } from "@/types/lang"
+
+const enWeek = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 
 export function toIso(date: Date) {
   const month = String(date.getMonth() + 1).padStart(2, "0")
@@ -19,6 +22,15 @@ export function formatDay(value: string, t: Dict) {
   const date = parseIso(value)
   const month = t.mon[date.getMonth()].replace(/^./, (char) => char.toUpperCase())
   return `${month} ${date.getDate()}`
+}
+
+export function formatMapDay(value: string, lang: Lang, t: Dict) {
+  const date = parseIso(value)
+  if (lang === "ru") {
+    const weekday = t.wd[(date.getDay() + 6) % 7]
+    return `${weekday}, ${date.getDate()} ${t.mon[date.getMonth()]}`
+  }
+  return `${enWeek[date.getDay()]}, ${t.mon[date.getMonth()]} ${date.getDate()}`
 }
 
 export function rangeLabel(start: string, end: string, t: Dict) {

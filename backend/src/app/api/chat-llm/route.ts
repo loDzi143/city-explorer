@@ -1,6 +1,6 @@
 import { logger } from "@/infrastructure/logging/logger"
-import { parseChatLlmBody } from "@/modules/ai/llm/chat.schemas"
-import { chatService } from "@/modules/ai/llm/chat.service"
+import { parseTripAgentBody } from "@/modules/ai/agents/agent.schemas"
+import { tripAgent } from "@/modules/ai/agents/trip.agent"
 import { corsHeaders } from "@/shared/http/cors"
 import { errorResponse } from "@/shared/http/error-response"
 
@@ -20,14 +20,14 @@ export async function POST(request: Request) {
     return Response.json({ error: "Message is required" }, { status: 400, headers })
   }
 
-  const parsed = parseChatLlmBody(payload)
+  const parsed = parseTripAgentBody(payload)
   if (!parsed.ok) {
     return Response.json({ error: parsed.error }, { status: 400, headers })
   }
 
   try {
-    const completion = await chatService.complete(parsed.data.messages)
-    return Response.json(completion, { headers })
+    const reply = await tripAgent.reply(parsed.data)
+    return Response.json(reply, { headers })
   } catch (error) {
     logger.error(error)
     return errorResponse(error, headers, { status: 502, message: "LLM is unavailable" })

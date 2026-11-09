@@ -2,7 +2,7 @@ import { z } from "zod"
 
 import { isLanguage } from "@/shared/types/language"
 
-import type { LocationSuggestion, SuggestLocationsInput } from "./geocoding.types"
+import type { LocationSuggestion, PlaceCandidate, SuggestLocationsInput } from "./geocoding.types"
 
 export const suggestLocationsQuerySchema = z.object({
   query: z.string().trim().max(200),
@@ -39,5 +39,18 @@ export function parseSuggestLocationsQuery(
 
 export function parseLocationSuggestions(payload: unknown): LocationSuggestion[] | null {
   const result = locationSuggestionSchema.array().safeParse(payload)
+  return result.success ? result.data : null
+}
+
+const placeCandidateSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  longitude: z.number().finite(),
+  latitude: z.number().finite(),
+  relevance: z.number().finite(),
+})
+
+export function parsePlaceCandidateBatches(payload: unknown): PlaceCandidate[][] | null {
+  const result = placeCandidateSchema.array().array().safeParse(payload)
   return result.success ? result.data : null
 }

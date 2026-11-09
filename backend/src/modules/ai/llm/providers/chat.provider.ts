@@ -1,5 +1,5 @@
-import type { ChatCompletion, ChatMessage } from "@/modules/ai/llm/chat.types"
+import type { ChatCompletion, ModelMessage, ToolDefinition } from "@/modules/ai/llm/chat.types"
 
 export interface ChatProvider {
-  complete(messages: ChatMessage[]): Promise<ChatCompletion>
+  complete(messages: ModelMessage[], tools?: ToolDefinition[]): Promise<ChatCompletion>
 }

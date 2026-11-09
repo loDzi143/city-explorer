@@ -138,6 +138,14 @@ export function Trash() {
   )
 }
 
+export function Cross({ size = 14 }: { size?: number }) {
+  return (
+    <Icon size={size}>
+      <path d="M6 6l12 12M18 6L6 18" />
+    </Icon>
+  )
+}
+
 export function Compass({ size = 20 }: { size?: number }) {
   return (
     <Icon size={size}>
