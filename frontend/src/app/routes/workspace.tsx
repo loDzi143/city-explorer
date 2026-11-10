@@ -41,16 +41,19 @@ export function WorkspacePage() {
 
   const t = tr(lang)
   const chat = chats.find((item) => item.id === activeId) ?? null
-  const beginActiveItinerary = useCallback(() => (chat ? beginItinerary(chat.id) : false), [beginItinerary, chat])
+  const beginActiveItinerary = useCallback(() => (chat ? beginItinerary(chat.id) : null), [beginItinerary, chat])
   const finishActiveItinerary = useCallback(
-    (text: string) => {
-      if (chat) finishItinerary(chat.id, text)
+    (text: string, token: number) => {
+      if (chat) finishItinerary(chat.id, text, token)
     },
     [chat, finishItinerary],
   )
-  const failActiveItinerary = useCallback(() => {
-    if (chat) failItinerary(chat.id)
-  }, [chat, failItinerary])
+  const failActiveItinerary = useCallback(
+    (token?: number) => {
+      if (chat) failItinerary(chat.id, token)
+    },
+    [chat, failItinerary],
+  )
   const place = useMemo(() => (chat ? tripPlace(chat) : null), [chat])
   const showForm = Boolean(chat && (chat.messages === null || editing))
   const mapFocus = useMemo(
@@ -191,8 +194,9 @@ export function WorkspacePage() {
                 t={t}
                 lang={lang}
                 editing={editing && chat.messages !== null}
-                onSubmit={(value) => {
-                  saveTrip(chat.id, value)
+                onCancel={() => setEditing(false)}
+                onSubmit={(value, notice) => {
+                  saveTrip(chat.id, value, notice)
                   setEditing(false)
                 }}
               />

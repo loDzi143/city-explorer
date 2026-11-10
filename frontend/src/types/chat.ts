@@ -1,10 +1,9 @@
-import type { Lang } from "@/types/lang"
 import type { Place } from "@/types/place"
 
 export type ChatMessage = {
   id: string
-  role: "user" | "ai"
-  text: Record<Lang, string>
+  role: "user" | "ai" | "system"
+  text: string
 }
 
 export type TripDay = {
@@ -30,6 +29,7 @@ export type Chat = {
   prefs: string
   messages: ChatMessage[] | null
   tripDays: TripDay[]
+  hints: string[]
   name?: string
 }
 

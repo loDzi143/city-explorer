@@ -53,7 +53,17 @@ export function parseAgentResponse(content: string): AgentResponse | null {
   const message = messageSchema.safeParse(payload.message)
   if (!message.success) return null
   const days = Array.isArray(payload.days) ? payload.days.flatMap(readItineraryDay).slice(0, 120) : []
-  return { message: message.data, days }
+  const hints = readHints(payload.hints)
+  return hints.length > 0 ? { message: message.data, days, hints } : { message: message.data, days }
+}
+
+function readHints(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((item) => {
+    if (typeof item !== "string") return []
+    const hint = item.trim()
+    return hint ? [hint] : []
+  })
 }
 
 function readItineraryDay(value: unknown): ItineraryDay[] {

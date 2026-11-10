@@ -6,8 +6,8 @@ import { systemPrompt } from "./system-prompt"
 
 export function chatHistory(chat: Chat, lang: Lang): ChatLlmMessage[] {
   const turns: ChatLlmMessage[] = (chat.messages ?? []).map((message) => ({
-    role: message.role === "user" ? "user" : "assistant",
-    content: message.text[lang],
+    role: message.role === "user" ? "user" : message.role === "system" ? "system" : "assistant",
+    content: message.text,
   }))
 
   return [{ role: "system", content: systemPrompt(chat, lang) }, ...turns]

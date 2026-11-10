@@ -8,7 +8,7 @@ import { executeGeocodePlaces, geocodePlacesTool } from "@/modules/ai/tools/geoc
 const TOOL_ROUNDS = 3
 
 const JSON_REPAIR =
-  "The previous reply was not valid JSON. Reply again with only one JSON object { \"message\": string, \"days\": [{ \"date\": \"YYYY-MM-DD\", \"places\": [{ \"id\": string, \"name\": string, \"description\": string, \"coordinates\": { \"latitude\": number, \"longitude\": number } }] }] }. Do not call tools."
+  "The previous reply was not valid JSON. Reply again with only one JSON object { \"message\": string, \"days\": [{ \"date\": \"YYYY-MM-DD\", \"places\": [{ \"id\": string, \"name\": string, \"description\": string, \"coordinates\": { \"latitude\": number, \"longitude\": number } }] }], \"hints\": [string, string, string] }. Do not call tools."
 
 export function createTripAgent(service: Pick<ReturnType<typeof createChatService>, "complete"> = chatService) {
   return {

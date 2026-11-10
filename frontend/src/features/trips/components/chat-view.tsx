@@ -9,7 +9,7 @@ import { tripPlace } from "@/utils/place"
 
 import { useChatReply } from "../hooks/use-chat-reply"
 import { assistantMessage } from "../utils/assistant-message"
-import { MarkdownMessage } from "./markdown-message"
+import { AssistantReply } from "./assistant-reply"
 
 function AiMessage({ children }: { children: ReactNode }) {
   return (
@@ -41,16 +41,16 @@ export function ChatView({
   onEdit: () => void
   itineraryPending: boolean
   itineraryFailed: boolean
-  onBeginItinerary: () => boolean
-  onItinerary: (text: string) => void
-  onItineraryError: () => void
+  onBeginItinerary: () => number | null
+  onItinerary: (text: string, token: number) => void
+  onItineraryError: (token?: number) => void
 }) {
   const [draft, setDraft] = useState("")
   const end = useRef<HTMLDivElement>(null)
   const city = tripPlace(chat)
   const messages = chat.messages ?? []
   const lastRole = messages[messages.length - 1]?.role
-  const expectingReply = messages.length === 0 || lastRole === "user"
+  const expectingReply = messages.length === 0 || lastRole === "user" || lastRole === "system"
   const typing = !itineraryFailed && (itineraryPending || expectingReply)
   const { retry } = useChatReply({
     chat,
@@ -108,13 +108,13 @@ export function ChatView({
         </div>
         <AiMessage>{t.welcome}</AiMessage>
         {messages.map((message) =>
-          message.role === "user" ? (
+          message.role === "system" ? null : message.role === "user" ? (
             <div key={message.id} className="flex justify-end">
-              <div className="max-w-[80%] rounded-2xl rounded-br-md bg-hover px-4 py-2.5 text-[14.5px] leading-relaxed">{message.text[lang]}</div>
+              <div className="max-w-[80%] rounded-2xl rounded-br-md bg-hover px-4 py-2.5 text-[14.5px] leading-relaxed">{message.text}</div>
             </div>
           ) : (
             <AiMessage key={message.id}>
-              <MarkdownMessage text={assistantMessage(message.text[lang])} />
+              <AssistantReply text={assistantMessage(message.text)} />
             </AiMessage>
           ),
         )}
@@ -138,13 +138,15 @@ export function ChatView({
         <div ref={end} />
       </div>
       <div className="mx-auto w-full max-w-[680px] px-4 pb-5 md:px-6">
-        <div className="mb-2.5 flex flex-wrap gap-2">
-          {t.chips.map((chip) => (
-            <button key={chip} type="button" disabled={typing} onClick={() => send(chip)} className="rounded-full border border-line px-3 py-1 text-xs text-mute transition hover:border-brand hover:text-brand disabled:pointer-events-none disabled:opacity-35">
-              {chip}
-            </button>
-          ))}
-        </div>
+        {!typing && chat.hints.length > 0 && (
+          <div className="mb-2.5 flex flex-wrap gap-2">
+            {chat.hints.map((hint, index) => (
+              <button key={`${index}-${hint}`} type="button" onClick={() => send(hint)} className="rounded-full border border-line px-3 py-1 text-xs text-mute transition hover:border-brand hover:text-brand">
+                {hint}
+              </button>
+            ))}
+          </div>
+        )}
         <form onSubmit={submit} className="flex items-end gap-2 rounded-2xl border border-line bg-sunk p-2 pl-4 transition focus-within:border-brand/60 focus-within:ring-2 focus-within:ring-brand/20">
           <textarea
             rows={1}

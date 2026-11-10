@@ -22,7 +22,17 @@ const agentResponseSchema = z.object({
       ),
     }),
   ),
+  hints: z.preprocess(hintStrings, z.array(z.string()).optional()),
 })
+
+function hintStrings(value: unknown) {
+  if (!Array.isArray(value)) return undefined
+  return value.flatMap((item) => {
+    if (typeof item !== "string") return []
+    const hint = item.trim()
+    return hint ? [hint] : []
+  })
+}
 
 export type AgentResponse = z.infer<typeof agentResponseSchema>
 

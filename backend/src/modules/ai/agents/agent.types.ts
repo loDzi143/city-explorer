@@ -30,4 +30,5 @@ export type ItineraryDay = {
 export type AgentResponse = {
   message: string
   days: ItineraryDay[]
+  hints?: string[]
 }

@@ -33,6 +33,17 @@ export function formatMapDay(value: string, lang: Lang, t: Dict) {
   return `${enWeek[date.getDay()]}, ${t.mon[date.getMonth()]} ${date.getDate()}`
 }
 
+const itineraryDate: Record<Lang, Intl.DateTimeFormat> = {
+  en: new Intl.DateTimeFormat("en-US", { weekday: "long", month: "long", day: "numeric" }),
+  ru: new Intl.DateTimeFormat("ru-RU", { weekday: "long", day: "numeric", month: "long" }),
+}
+
+export function formatItineraryDay(value: string, lang: Lang) {
+  const formatted = itineraryDate[lang].format(parseIso(value))
+  if (lang !== "ru") return formatted
+  return formatted.replace(/^./, (char) => char.toUpperCase())
+}
+
 export function rangeLabel(start: string, end: string, t: Dict) {
   const days = Math.max(1, nightCount(start, end))
   return `${formatDay(start, t)} – ${formatDay(end, t)} · ${t.days(days)}`
