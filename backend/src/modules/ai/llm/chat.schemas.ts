@@ -2,10 +2,25 @@ import { z } from "zod"
 
 import { chatRoles, type ChatCompletion } from "@/modules/ai/llm/chat.types"
 
-const chatMessageSchema = z.object({
-  role: z.enum(chatRoles),
-  content: z.string().trim().min(1).max(20_000),
-})
+// The system message carries the full prompt plus the current itinerary, and assistant
+// messages carry the reply JSON with every planned day, so they get larger limits.
+const contentLimit: Record<(typeof chatRoles)[number], number> = {
+  system: 100_000,
+  assistant: 50_000,
+  user: 20_000,
+}
+
+const chatMessageSchema = z
+  .object({
+    role: z.enum(chatRoles),
+    content: z.string().trim().min(1),
+  })
+  .superRefine((message, ctx) => {
+    const limit = contentLimit[message.role]
+    if (message.content.length > limit) {
+      ctx.addIssue({ code: "too_big", origin: "string", maximum: limit, inclusive: true, input: message.content, path: ["content"] })
+    }
+  })
 
 export const chatMessagesSchema = z.array(chatMessageSchema).min(1).max(100)
 

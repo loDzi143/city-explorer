@@ -27,8 +27,17 @@ export type ItineraryDay = {
   places: ItineraryPlace[]
 }
 
+/** Trip settings the user changed during the conversation. Only changed fields are present. */
+export type TripSettingsUpdate = {
+  start?: string
+  end?: string
+  hotel?: string
+  prefs?: string
+}
+
 export type AgentResponse = {
   message: string
   days: ItineraryDay[]
   hints?: string[]
+  settings?: TripSettingsUpdate
 }

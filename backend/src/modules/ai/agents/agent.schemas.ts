@@ -2,7 +2,7 @@ import { z } from "zod"
 
 import { chatMessagesSchema } from "@/modules/ai/llm/chat.schemas"
 
-import type { AgentResponse, ItineraryDay, ItineraryPlace, TripAgentInput } from "./agent.types"
+import type { AgentResponse, ItineraryDay, ItineraryPlace, TripAgentInput, TripSettingsUpdate } from "./agent.types"
 
 const coordinatesSchema = z.object({
   latitude: z.number().finite().gte(-90).lte(90),
@@ -54,7 +54,23 @@ export function parseAgentResponse(content: string): AgentResponse | null {
   if (!message.success) return null
   const days = Array.isArray(payload.days) ? payload.days.flatMap(readItineraryDay).slice(0, 120) : []
   const hints = readHints(payload.hints)
-  return hints.length > 0 ? { message: message.data, days, hints } : { message: message.data, days }
+  const settings = readSettings(payload.settings)
+  const response: AgentResponse = { message: message.data, days }
+  if (hints.length > 0) response.hints = hints
+  if (settings) response.settings = settings
+  return response
+}
+
+function readSettings(value: unknown): TripSettingsUpdate | null {
+  if (!isRecord(value)) return null
+  const settings: TripSettingsUpdate = {}
+  const start = normalizeDate(value.start)
+  const end = normalizeDate(value.end)
+  if (start) settings.start = start
+  if (end) settings.end = end
+  if (typeof value.hotel === "string") settings.hotel = value.hotel.trim().slice(0, 1_000)
+  if (typeof value.prefs === "string") settings.prefs = value.prefs.trim().slice(0, 4_000)
+  return Object.keys(settings).length > 0 ? settings : null
 }
 
 function readHints(value: unknown): string[] {

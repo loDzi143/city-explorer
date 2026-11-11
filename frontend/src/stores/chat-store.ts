@@ -221,16 +221,47 @@ function readHints(value: unknown): string[] {
   })
 }
 
-function parseReply(text: string): { days: TripDay[]; hints: string[] } {
+type ReplySettings = Partial<Pick<TripDetails, "start" | "end" | "hotel" | "prefs">>
+
+function parseReply(text: string): { days: TripDay[]; hints: string[]; settings: ReplySettings | null } {
   let payload: unknown
   try {
     payload = JSON.parse(text)
   } catch {
-    return { days: [], hints: [] }
+    return { days: [], hints: [], settings: null }
   }
-  if (!payload || typeof payload !== "object") return { days: [], hints: [] }
-  const reply = payload as { days?: unknown; hints?: unknown }
-  return { days: readTripDays(reply.days), hints: readHints(reply.hints) }
+  if (!payload || typeof payload !== "object") return { days: [], hints: [], settings: null }
+  const reply = payload as { days?: unknown; hints?: unknown; settings?: unknown }
+  return { days: readTripDays(reply.days), hints: readHints(reply.hints), settings: readReplySettings(reply.settings) }
+}
+
+function readReplySettings(value: unknown): ReplySettings | null {
+  if (!value || typeof value !== "object") return null
+  const raw = value as { start?: unknown; end?: unknown; hotel?: unknown; prefs?: unknown }
+  const isoDate = (date: unknown) => (typeof date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(date.trim()) ? date.trim() : undefined)
+  const settings: ReplySettings = {}
+  const start = isoDate(raw.start)
+  const end = isoDate(raw.end)
+  if (start) settings.start = start
+  if (end) settings.end = end
+  if (typeof raw.hotel === "string") settings.hotel = raw.hotel.trim()
+  if (typeof raw.prefs === "string") settings.prefs = raw.prefs.trim()
+  return Object.keys(settings).length > 0 ? settings : null
+}
+
+/** Applies settings the model changed in the conversation. A date change that would put start after end is ignored. */
+function applyReplySettings(details: TripDetails, settings: ReplySettings | null): TripDetails {
+  if (!settings) return details
+  const next: TripDetails = { ...details }
+  const start = settings.start ?? details.start
+  const end = settings.end ?? details.end
+  if ((settings.start || settings.end) && start && end && start <= end) {
+    next.start = start
+    next.end = end
+  }
+  if (settings.hotel !== undefined) next.hotel = settings.hotel
+  if (settings.prefs !== undefined) next.prefs = settings.prefs
+  return next
 }
 
 /** Plans differ when a day's date, or the ordered set of places in a day, changed. */
@@ -366,19 +397,22 @@ export const useChatStore = create<ChatState>()(
           role: "ai",
           text,
         }
-        const { days, hints } = parseReply(text)
+        const { days, hints, settings } = parseReply(text)
         set((state) => ({
           pendingItineraryIds: state.pendingItineraryIds.filter((item) => item !== id),
           failedItineraryIds: state.failedItineraryIds.filter((item) => item !== id),
           trips: state.trips.map((trip) => {
             if (trip.id !== id || trip.messages === null) return trip
+            // Settings changed in the conversation update the trip directly, without a system message.
+            const details = applyReplySettings(trip.details, settings)
             const latest = latestPlan(trip)
             const changed = days.length > 0 && (!latest || !sameDays(latest.days, days))
             const plan: TripPlan | null = changed
-              ? { date: new Date().toISOString(), start: trip.details.start, end: trip.details.end, days }
+              ? { date: new Date().toISOString(), start: details.start, end: details.end, days }
               : null
             return {
               ...trip,
+              details,
               messages: [...trip.messages, reply],
               plans: plan ? [...trip.plans, plan] : trip.plans,
               hints,

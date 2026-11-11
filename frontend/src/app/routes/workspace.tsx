@@ -70,10 +70,13 @@ export function WorkspacePage() {
   const tripDays = shownPlan?.days
   const [pickedDay, setPickedDay] = useState<{ chatId: string; date: string } | null>(null)
   const [placeRequest, setPlaceRequest] = useState<MapPlaceRequest | null>(null)
+  // Days without places can't be shown on the map, so they are not selectable.
+  const emptyDates = useMemo(() => (tripDays ?? []).filter((day) => day.places.length === 0).map((day) => day.date), [tripDays])
+  const selectableDays = tripDays?.filter((day) => day.places.length > 0) ?? []
   const selectedDate =
-    chat && tripDays && pickedDay?.chatId === chat.id && tripDays.some((day) => day.date === pickedDay.date)
+    chat && pickedDay?.chatId === chat.id && selectableDays.some((day) => day.date === pickedDay.date)
       ? pickedDay.date
-      : (tripDays?.[0]?.date ?? "")
+      : (selectableDays[0]?.date ?? "")
   const mapStops = useMemo(() => {
     const day = tripDays?.find((item) => item.date === selectedDate)
     if (!day) return []
@@ -86,9 +89,10 @@ export function WorkspacePage() {
     }))
   }, [tripDays, selectedDate])
   const daySelect =
-    tripDays && tripDays.length > 0 ? (
+    tripDays && selectableDays.length > 0 ? (
       <MapDaySelect
         dates={tripDays.map((day) => day.date)}
+        disabledDates={emptyDates}
         value={selectedDate}
         onChange={(date) => {
           if (chat) setPickedDay({ chatId: chat.id, date })

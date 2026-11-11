@@ -23,6 +23,14 @@ const agentResponseSchema = z.object({
     }),
   ),
   hints: z.preprocess(hintStrings, z.array(z.string()).optional()),
+  settings: z
+    .object({
+      start: z.string().optional(),
+      end: z.string().optional(),
+      hotel: z.string().optional(),
+      prefs: z.string().optional(),
+    })
+    .optional(),
 })
 
 function hintStrings(value: unknown) {
