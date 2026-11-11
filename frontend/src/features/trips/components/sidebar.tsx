@@ -2,8 +2,8 @@ import { useEffect, useState, type ReactNode } from "react"
 
 import { Compass, Dots, Edit, Moon, Pin, Plus, SidebarR, Sun, Trash } from "@/components/icons"
 import type { Dict } from "@/lib/i18n"
-import { chatTitle } from "@/stores/chat-store"
-import type { Chat } from "@/types/chat"
+import { tripTitle } from "@/stores/chat-store"
+import type { Trip } from "@/types/chat"
 import type { Lang } from "@/types/lang"
 import { tripPlace } from "@/utils/place"
 
@@ -43,7 +43,7 @@ export function Sidebar({
   collapsed,
   fill = false,
   className = "",
-  chats,
+  trips,
   activeId,
   onToggle,
   onNew,
@@ -59,7 +59,7 @@ export function Sidebar({
   collapsed: boolean
   fill?: boolean
   className?: string
-  chats: Chat[]
+  trips: Trip[]
   activeId: string | null
   onToggle: () => void
   onNew: () => void
@@ -71,7 +71,7 @@ export function Sidebar({
 }) {
   const [menu, setMenu] = useState<string | null>(null)
   const [renaming, setRenaming] = useState<string | null>(null)
-  const title = (chat: Chat) => chatTitle(chat, t)
+  const title = (trip: Trip) => tripTitle(trip, t)
 
   useEffect(() => {
     const close = () => setMenu(null)
@@ -118,16 +118,16 @@ export function Sidebar({
       </div>
       {collapsed ? (
         <div className="mt-2 flex flex-1 flex-col items-center gap-1 overflow-y-auto">
-          {chats.map((chat) => (
+          {trips.map((trip) => (
             <button
-              key={chat.id}
+              key={trip.id}
               type="button"
-              onClick={() => onSelect(chat.id)}
-              title={title(chat)}
-              aria-label={title(chat)}
-              className={`grid size-10 place-items-center rounded-xl text-lg transition ${chat.id === activeId ? "bg-brand-soft" : "hover:bg-hover"}`}
+              onClick={() => onSelect(trip.id)}
+              title={title(trip)}
+              aria-label={title(trip)}
+              className={`grid size-10 place-items-center rounded-xl text-lg transition ${trip.id === activeId ? "bg-brand-soft" : "hover:bg-hover"}`}
             >
-              {tripPlace(chat)?.flag ?? (
+              {tripPlace(trip)?.flag ?? (
                 <span className="text-mute">
                   <Pin />
                 </span>
@@ -139,17 +139,17 @@ export function Sidebar({
         <>
           <div className="px-5 pb-1.5 pt-5 text-[11px] font-medium uppercase tracking-[.08em] text-mute">{t.trips}</div>
           <nav className="flex-1 space-y-0.5 overflow-y-auto px-2">
-            {chats.length === 0 && <p className="px-3 py-2 text-sm text-mute">{t.noTrips}</p>}
-            {chats.map((chat) => {
-              const active = chat.id === activeId
+            {trips.length === 0 && <p className="px-3 py-2 text-sm text-mute">{t.noTrips}</p>}
+            {trips.map((trip) => {
+              const active = trip.id === activeId
               return (
-                <div key={chat.id} className="group relative">
-                  {renaming === chat.id ? (
+                <div key={trip.id} className="group relative">
+                  {renaming === trip.id ? (
                     <input
                       autoFocus
-                      defaultValue={title(chat)}
+                      defaultValue={title(trip)}
                       onBlur={(event) => {
-                        if (event.currentTarget.dataset.cancel !== "true") onRename(chat.id, event.currentTarget.value)
+                        if (event.currentTarget.dataset.cancel !== "true") onRename(trip.id, event.currentTarget.value)
                         setRenaming(null)
                       }}
                       onKeyDown={(event) => {
@@ -164,32 +164,32 @@ export function Sidebar({
                   ) : (
                     <button
                       type="button"
-                      onClick={() => onSelect(chat.id)}
+                      onClick={() => onSelect(trip.id)}
                       className={`flex h-9 w-full items-center gap-2.5 rounded-lg pl-3 pr-9 text-left text-sm transition ${active ? "bg-hover font-medium" : "text-ink/80 hover:bg-hover/70"}`}
                     >
-                      <span className="text-base leading-none">{tripPlace(chat)?.flag ?? "✦"}</span>
-                      <span className="truncate">{title(chat)}</span>
+                      <span className="text-base leading-none">{tripPlace(trip)?.flag ?? "✦"}</span>
+                      <span className="truncate">{title(trip)}</span>
                     </button>
                   )}
-                  {renaming !== chat.id && (
+                  {renaming !== trip.id && (
                     <button
                       type="button"
                       aria-label={t.menu}
                       onClick={(event) => {
                         event.stopPropagation()
-                        setMenu(menu === chat.id ? null : chat.id)
+                        setMenu(menu === trip.id ? null : trip.id)
                       }}
-                      className={`absolute right-1.5 top-1.5 grid size-6 place-items-center rounded-md text-mute hover:bg-line hover:text-ink ${menu === chat.id ? "opacity-100" : "opacity-0 focus:opacity-100 group-hover:opacity-100 max-md:opacity-100"}`}
+                      className={`absolute right-1.5 top-1.5 grid size-6 place-items-center rounded-md text-mute hover:bg-line hover:text-ink ${menu === trip.id ? "opacity-100" : "opacity-0 focus:opacity-100 group-hover:opacity-100 max-md:opacity-100"}`}
                     >
                       <Dots />
                     </button>
                   )}
-                  {menu === chat.id && (
+                  {menu === trip.id && (
                     <div onClick={(event) => event.stopPropagation()} className="absolute right-1 top-9 z-30 w-40 rounded-xl border border-line bg-panel p-1 shadow-xl">
                       <button
                         type="button"
                         onClick={() => {
-                          setRenaming(chat.id)
+                          setRenaming(trip.id)
                           setMenu(null)
                         }}
                         className="flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-sm hover:bg-hover"
@@ -200,7 +200,7 @@ export function Sidebar({
                       <button
                         type="button"
                         onClick={() => {
-                          onDelete(chat.id)
+                          onDelete(trip.id)
                           setMenu(null)
                         }}
                         className="flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-sm text-red-500 hover:bg-hover"

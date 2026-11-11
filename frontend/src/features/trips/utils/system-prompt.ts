@@ -1,4 +1,4 @@
-import type { Chat } from "@/types/chat"
+import type { Trip } from "@/types/chat"
 import type { Lang } from "@/types/lang"
 
 const responseLanguage: Record<Lang, string> = {
@@ -6,10 +6,11 @@ const responseLanguage: Record<Lang, string> = {
   ru: "русский",
 }
 
-export function systemPrompt(chat: Chat, lang: Lang) {
+export function systemPrompt(trip: Trip, lang: Lang) {
   const missing = "Not specified";
 
-  const place = chat.place;
+  const place = trip.place;
+  const { start, end } = trip.details;
 
   const city = place
     ? [place.city, place.country].filter(Boolean).join(", ")
@@ -20,12 +21,12 @@ export function systemPrompt(chat: Chat, lang: Lang) {
     : missing;
 
   const dateRange =
-    chat.start && chat.end
-      ? `${chat.start} – ${chat.end}`
+    start && end
+      ? `${start} – ${end}`
       : missing;
 
-  const hotel = chat.hotel.trim() || missing;
-  const preferences = chat.prefs.trim() || missing;
+  const hotel = trip.details.hotel.trim() || missing;
+  const preferences = trip.details.prefs.trim() || missing;
   const language = responseLanguage[lang];
 
   return `

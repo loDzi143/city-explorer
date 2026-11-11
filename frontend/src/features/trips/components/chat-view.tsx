@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react"
+import { useLayoutEffect, useRef, useState, type FormEvent, type ReactNode } from "react"
 
 import { Compass, Send, Settings } from "@/components/icons"
 import type { Dict } from "@/lib/i18n"
-import type { Chat } from "@/types/chat"
+import type { Trip } from "@/types/chat"
 import type { Lang } from "@/types/lang"
 import { rangeLabel } from "@/utils/dates"
 import { tripPlace } from "@/utils/place"
@@ -10,6 +10,10 @@ import { tripPlace } from "@/utils/place"
 import { useChatReply } from "../hooks/use-chat-reply"
 import { assistantMessage } from "../utils/assistant-message"
 import { AssistantReply } from "./assistant-reply"
+import { SettingsNotice } from "./settings-notice"
+import { TripPlan } from "./trip-plan"
+
+export type TripTab = "chat" | "plan"
 
 function AiMessage({ children }: { children: ReactNode }) {
   return (
@@ -23,9 +27,14 @@ function AiMessage({ children }: { children: ReactNode }) {
 }
 
 export function ChatView({
-  chat,
+  trip,
   t,
   lang,
+  tab,
+  onTab,
+  planIndex,
+  onPlanIndex,
+  onPlace,
   onSend,
   onEdit,
   itineraryPending,
@@ -34,9 +43,15 @@ export function ChatView({
   onItinerary,
   onItineraryError,
 }: {
-  chat: Chat
+  trip: Trip
   t: Dict
   lang: Lang
+  tab: TripTab
+  onTab: (tab: TripTab) => void
+  /** Plan version shown in the plan tab; `null` is the current plan. */
+  planIndex: number | null
+  onPlanIndex: (index: number | null) => void
+  onPlace: (date: string, placeId: string) => void
   onSend: (text: string) => void
   onEdit: () => void
   itineraryPending: boolean
@@ -46,14 +61,14 @@ export function ChatView({
   onItineraryError: (token?: number) => void
 }) {
   const [draft, setDraft] = useState("")
-  const end = useRef<HTMLDivElement>(null)
-  const city = tripPlace(chat)
-  const messages = chat.messages ?? []
+  const scroller = useRef<HTMLDivElement>(null)
+  const city = tripPlace(trip)
+  const messages = trip.messages ?? []
   const lastRole = messages[messages.length - 1]?.role
   const expectingReply = messages.length === 0 || lastRole === "user" || lastRole === "system"
   const typing = !itineraryFailed && (itineraryPending || expectingReply)
   const { retry } = useChatReply({
-    chat,
+    trip,
     lang,
     enabled: Boolean(city),
     onBegin: onBeginItinerary,
@@ -61,9 +76,19 @@ export function ChatView({
     onError: onItineraryError,
   })
 
-  useEffect(() => {
-    end.current?.scrollIntoView({ behavior: "smooth" })
-  }, [messages.length, chat.id, itineraryPending, itineraryFailed])
+  // Opening the chat (tab switch or another trip) jumps to the bottom before paint;
+  // new messages while the chat is open scroll smoothly.
+  const shownTripId = useRef<string | null>(null)
+  useLayoutEffect(() => {
+    if (tab !== "chat") {
+      shownTripId.current = null
+      return
+    }
+    const opened = shownTripId.current !== trip.id
+    shownTripId.current = trip.id
+    const box = scroller.current
+    box?.scrollTo({ top: box.scrollHeight, behavior: opened ? "instant" : "smooth" })
+  }, [messages.length, trip.id, itineraryPending, itineraryFailed, tab])
 
   if (!city) return null
 
@@ -79,9 +104,38 @@ export function ChatView({
     send(draft)
   }
 
+  const tabs: [TripTab, string][] = [
+    ["chat", t.chatTab],
+    ["plan", t.itinerary],
+  ]
+
   return (
     <div className="flex h-full flex-col">
-      <div className="mx-auto w-full max-w-[680px] flex-1 space-y-6 overflow-y-auto px-4 py-5 md:px-6 md:py-6">
+      <div className="mx-auto w-full max-w-[680px] shrink-0 px-4 pt-3 md:px-6">
+        <div role="tablist" aria-label={t.summaryTitle} className="flex rounded-xl bg-sunk p-1">
+          {tabs.map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              role="tab"
+              id={`trip-tab-${value}`}
+              aria-selected={tab === value}
+              aria-controls={`trip-panel-${value}`}
+              onClick={() => onTab(value)}
+              className={`flex h-8 flex-1 items-center justify-center gap-1.5 rounded-lg text-[13px] font-medium transition ${tab === value ? "bg-panel text-ink shadow-sm ring-1 ring-line" : "text-mute hover:text-ink"}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+      {tab === "plan" ? (
+        <div role="tabpanel" id="trip-panel-plan" aria-labelledby="trip-tab-plan" className="min-h-0 flex-1">
+          <TripPlan plans={trip.plans} index={planIndex} onIndex={onPlanIndex} pending={typing} onPlace={onPlace} lang={lang} t={t} />
+        </div>
+      ) : (
+      <div role="tabpanel" id="trip-panel-chat" aria-labelledby="trip-tab-chat" className="flex min-h-0 flex-1 flex-col">
+      <div ref={scroller} className="mx-auto w-full max-w-[680px] flex-1 space-y-6 overflow-y-auto px-4 py-5 md:px-6 md:py-6">
         <div className="rounded-xl border border-line bg-sunk p-4">
           <div className="mb-3 flex items-center justify-between">
             <div className="flex items-center gap-2 text-[13px] font-medium">
@@ -99,16 +153,18 @@ export function ChatView({
               {city.city}, {city.country}
             </dd>
             <dt className="text-mute">{t.dates}</dt>
-            <dd>{chat.start && chat.end ? rangeLabel(chat.start, chat.end, t) : t.notSet}</dd>
+            <dd>{trip.details.start && trip.details.end ? rangeLabel(trip.details.start, trip.details.end, t) : t.notSet}</dd>
             <dt className="text-mute">{t.summaryHotel}</dt>
-            <dd>{chat.hotel || <span className="text-mute">{t.notSet}</span>}</dd>
+            <dd>{trip.details.hotel || <span className="text-mute">{t.notSet}</span>}</dd>
             <dt className="text-mute">{t.summaryPrefs}</dt>
-            <dd>{chat.prefs || <span className="text-mute">{t.notSet}</span>}</dd>
+            <dd>{trip.details.prefs || <span className="text-mute">{t.notSet}</span>}</dd>
           </dl>
         </div>
         <AiMessage>{t.welcome}</AiMessage>
         {messages.map((message) =>
-          message.role === "system" ? null : message.role === "user" ? (
+          message.role === "system" ? (
+            <SettingsNotice key={message.id} message={message} t={t} />
+          ) : message.role === "user" ? (
             <div key={message.id} className="flex justify-end">
               <div className="max-w-[80%] rounded-2xl rounded-br-md bg-hover px-4 py-2.5 text-[14.5px] leading-relaxed">{message.text}</div>
             </div>
@@ -135,12 +191,11 @@ export function ChatView({
             </span>
           </AiMessage>
         )}
-        <div ref={end} />
       </div>
       <div className="mx-auto w-full max-w-[680px] px-4 pb-5 md:px-6">
-        {!typing && chat.hints.length > 0 && (
+        {!typing && trip.hints.length > 0 && (
           <div className="mb-2.5 flex flex-wrap gap-2">
-            {chat.hints.map((hint, index) => (
+            {trip.hints.map((hint, index) => (
               <button key={`${index}-${hint}`} type="button" onClick={() => send(hint)} className="rounded-full border border-line px-3 py-1 text-xs text-mute transition hover:border-brand hover:text-brand">
                 {hint}
               </button>
@@ -167,6 +222,8 @@ export function ChatView({
           </button>
         </form>
       </div>
+      </div>
+      )}
     </div>
   )
 }

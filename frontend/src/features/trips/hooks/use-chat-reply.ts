@@ -1,14 +1,13 @@
 import { useCallback, useEffect } from "react"
 
-import type { Chat } from "@/types/chat"
+import type { Trip } from "@/types/chat"
 import type { Lang } from "@/types/lang"
 
 import { chatLlm } from "../api/chat-llm"
 import { chatHistory } from "../utils/chat-history"
-import { messageWithItinerary } from "../utils/itinerary-message"
 
-function needsReply(chat: Chat) {
-  const messages = chat.messages
+function needsReply(trip: Trip) {
+  const messages = trip.messages
   if (!messages) return false
   if (messages.length === 0) return true
   const role = messages[messages.length - 1]?.role
@@ -16,14 +15,14 @@ function needsReply(chat: Chat) {
 }
 
 export function useChatReply({
-  chat,
+  trip,
   lang,
   enabled,
   onBegin,
   onFinish,
   onError,
 }: {
-  chat: Chat
+  trip: Trip
   lang: Lang
   enabled: boolean
   onBegin: () => number | null
@@ -31,26 +30,23 @@ export function useChatReply({
   onError: (token?: number) => void
 }) {
   const send = useCallback(() => {
-    if (!enabled || !needsReply(chat)) return
-    const place = chat.place
+    if (!enabled || !needsReply(trip)) return
+    const place = trip.place
     if (!place) {
       onError()
       return
     }
     const token = onBegin()
     if (token == null) return
-    chatLlm(chatHistory(chat, lang), {
+    chatLlm(chatHistory(trip, lang), {
       city: place.city,
       country: place.country,
       latitude: place.latitude,
       longitude: place.longitude,
     })
-      .then((reply) => {
-        const message = messageWithItinerary(reply.message, reply.days, lang)
-        onFinish(JSON.stringify({ ...reply, message }), token)
-      })
+      .then((reply) => onFinish(JSON.stringify(reply), token))
       .catch(() => onError(token))
-  }, [chat, enabled, lang, onBegin, onError, onFinish])
+  }, [trip, enabled, lang, onBegin, onError, onFinish])
 
   useEffect(() => {
     send()

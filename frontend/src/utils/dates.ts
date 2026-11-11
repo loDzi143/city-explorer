@@ -48,3 +48,12 @@ export function rangeLabel(start: string, end: string, t: Dict) {
   const days = Math.max(1, nightCount(start, end))
   return `${formatDay(start, t)} – ${formatDay(end, t)} · ${t.days(days)}`
 }
+
+const savedAtDate: Record<Lang, Intl.DateTimeFormat> = {
+  en: new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }),
+  ru: new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }),
+}
+
+export function formatSavedAt(value: string, lang: Lang) {
+  return savedAtDate[lang].format(new Date(value))
+}

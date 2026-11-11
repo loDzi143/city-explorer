@@ -12,3 +12,9 @@ export type MapStop = {
   longitude: number
   latitude: number
 }
+
+/** Asks the map to open a stop's popup. `seq` changes on every request so a repeated click reopens it. */
+export type MapPlaceRequest = {
+  id: string
+  seq: number
+}

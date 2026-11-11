@@ -1,9 +1,12 @@
 import { create } from "zustand"
-import { persist } from "zustand/middleware"
+import { createJSONStorage, persist } from "zustand/middleware"
 
-import type { Chat, ChatMessage, TripDay, TripDetails } from "@/types/chat"
+import type { ChatMessage, SettingsNotice, Trip, TripDay, TripDetails, TripPlan, TripSettings, TripUpdate } from "@/types/chat"
 import type { Lang } from "@/types/lang"
 import { isPlace, tripPlace } from "@/utils/place"
+
+const STORAGE_KEY = "city-explorer-trips"
+const LEGACY_STORAGE_KEY = "city-explorer-chats"
 
 type ChatState = {
   hasHydrated: boolean
@@ -11,18 +14,18 @@ type ChatState = {
   dark: boolean
   langChosen: boolean
   darkChosen: boolean
-  chats: Chat[]
+  trips: Trip[]
   activeId: string | null
   setHasHydrated: (hasHydrated: boolean) => void
   setLang: (lang: Lang) => void
   setDark: (dark: boolean) => void
   followSystemLang: () => void
   followSystemDark: () => void
-  createChat: () => void
-  selectChat: (id: string) => void
-  renameChat: (id: string, name: string) => void
-  deleteChat: (id: string) => void
-  saveTrip: (id: string, value: TripDetails, notice?: string | null) => void
+  createTrip: () => void
+  selectTrip: (id: string) => void
+  renameTrip: (id: string, name: string) => void
+  deleteTrip: (id: string) => void
+  saveTrip: (id: string, value: TripSettings, notice?: SettingsNotice | null) => void
   sendMessage: (id: string, text: string) => void
   pendingItineraryIds: string[]
   failedItineraryIds: string[]
@@ -31,7 +34,7 @@ type ChatState = {
   failItinerary: (id: string, token?: number) => void
 }
 
-type PersistedChatState = Pick<ChatState, "chats" | "activeId"> & {
+type PersistedChatState = Pick<ChatState, "trips" | "activeId"> & {
   lang?: Lang
   dark?: boolean
 }
@@ -62,6 +65,10 @@ function prefersDark() {
   return typeof window !== "undefined" && window.matchMedia("(prefers-color-scheme: dark)").matches
 }
 
+function isDateOrNull(value: unknown): value is string | null {
+  return typeof value === "string" || value === null
+}
+
 function readMessageText(value: unknown): string | null {
   if (typeof value === "string") return value
   if (!value || typeof value !== "object") return null
@@ -74,35 +81,25 @@ function readMessageText(value: unknown): string | null {
 
 function readMessage(value: unknown): ChatMessage | null {
   if (!value || typeof value !== "object") return null
-  const message = value as { id?: unknown; role?: unknown; text?: unknown }
+  const message = value as { id?: unknown; role?: unknown; text?: unknown; update?: unknown }
   const text = readMessageText(message.text)
   if (typeof message.id !== "string" || text === null) return null
   if (message.role !== "user" && message.role !== "ai" && message.role !== "system") return null
-  return { id: message.id, role: message.role, text }
+  const update = message.role === "system" ? readUpdate(message.update) : null
+  return update ? { id: message.id, role: message.role, text, update } : { id: message.id, role: message.role, text }
 }
 
-function parseChat(value: unknown): Chat | null {
+function readUpdate(value: unknown): TripUpdate | null {
   if (!value || typeof value !== "object") return null
-  const chat = value as Chat & { place?: unknown }
-  const messages = readMessages(chat.messages)
-  const messagesOk = messages !== undefined
-  const valid =
-    typeof chat.id === "string" &&
-    (typeof chat.cityId === "string" || chat.cityId === null) &&
-    (typeof chat.start === "string" || chat.start === null) &&
-    (typeof chat.end === "string" || chat.end === null) &&
-    typeof chat.hotel === "string" &&
-    typeof chat.prefs === "string" &&
-    (chat.name === undefined || typeof chat.name === "string") &&
-    messagesOk
-  if (!valid) return null
-  return {
-    ...chat,
-    place: isPlace(chat.place) ? chat.place : null,
-    messages: messages ?? null,
-    tripDays: readTripDays(chat.tripDays),
-    hints: readHints(chat.hints),
+  const raw = value as { dates?: unknown; hotel?: unknown; prefs?: unknown }
+  const update: TripUpdate = {}
+  if (raw.dates && typeof raw.dates === "object") {
+    const dates = raw.dates as { start?: unknown; end?: unknown }
+    if (isDateOrNull(dates.start) && isDateOrNull(dates.end)) update.dates = { start: dates.start, end: dates.end }
   }
+  if (typeof raw.hotel === "string") update.hotel = raw.hotel
+  if (typeof raw.prefs === "string") update.prefs = raw.prefs
+  return Object.keys(update).length > 0 ? update : null
 }
 
 function readMessages(value: unknown): ChatMessage[] | null | undefined {
@@ -115,6 +112,61 @@ function readMessages(value: unknown): ChatMessage[] | null | undefined {
     messages.push(message)
   }
   return messages
+}
+
+function readDetails(value: unknown): TripDetails | null {
+  if (!value || typeof value !== "object") return null
+  const details = value as Partial<Record<keyof TripDetails, unknown>>
+  if (!isDateOrNull(details.cityId) || !isDateOrNull(details.start) || !isDateOrNull(details.end)) return null
+  if (typeof details.hotel !== "string" || typeof details.prefs !== "string") return null
+  return { cityId: details.cityId, start: details.start, end: details.end, hotel: details.hotel, prefs: details.prefs }
+}
+
+function parseTrip(value: unknown): Trip | null {
+  if (!value || typeof value !== "object") return null
+  const trip = value as Partial<Record<keyof Trip, unknown>>
+  const details = readDetails(trip.details)
+  const messages = readMessages(trip.messages)
+  if (typeof trip.id !== "string" || !details || messages === undefined) return null
+  return {
+    id: trip.id,
+    name: typeof trip.name === "string" ? trip.name : "",
+    details,
+    place: isPlace(trip.place) ? trip.place : null,
+    messages,
+    hints: readHints(trip.hints),
+    plans: readPlans(trip.plans),
+  }
+}
+
+/** Converts a chat saved under `city-explorer-chats` (flat details + `tripDays`). */
+function parseLegacyChat(value: unknown): Trip | null {
+  if (!value || typeof value !== "object") return null
+  const chat = value as { id?: unknown; name?: unknown; place?: unknown; messages?: unknown; hints?: unknown; tripDays?: unknown }
+  const details = readDetails(chat)
+  const messages = readMessages(chat.messages)
+  if (typeof chat.id !== "string" || !details || messages === undefined) return null
+  const days = readTripDays(chat.tripDays)
+  return {
+    id: chat.id,
+    name: typeof chat.name === "string" ? chat.name : "",
+    details,
+    place: isPlace(chat.place) ? chat.place : null,
+    messages,
+    hints: readHints(chat.hints),
+    plans: days.length > 0 ? [{ date: new Date().toISOString(), start: details.start, end: details.end, days }] : [],
+  }
+}
+
+function readPlans(value: unknown): TripPlan[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object") return []
+    const plan = item as Partial<Record<keyof TripPlan, unknown>>
+    if (typeof plan.date !== "string" || Number.isNaN(Date.parse(plan.date))) return []
+    if (!isDateOrNull(plan.start) || !isDateOrNull(plan.end)) return []
+    return [{ date: plan.date, start: plan.start, end: plan.end, days: readTripDays(plan.days) }]
+  })
 }
 
 function readTripDays(value: unknown): TripDay[] {
@@ -169,26 +221,29 @@ function readHints(value: unknown): string[] {
   })
 }
 
-function daysFromReply(text: string): TripDay[] {
+function parseReply(text: string): { days: TripDay[]; hints: string[] } {
   let payload: unknown
   try {
     payload = JSON.parse(text)
   } catch {
-    return []
+    return { days: [], hints: [] }
   }
-  if (!payload || typeof payload !== "object" || !("days" in payload)) return []
-  return readTripDays(payload.days)
+  if (!payload || typeof payload !== "object") return { days: [], hints: [] }
+  const reply = payload as { days?: unknown; hints?: unknown }
+  return { days: readTripDays(reply.days), hints: readHints(reply.hints) }
 }
 
-function hintsFromReply(text: string): string[] {
-  let payload: unknown
-  try {
-    payload = JSON.parse(text)
-  } catch {
-    return []
-  }
-  if (!payload || typeof payload !== "object" || !("hints" in payload)) return []
-  return readHints(payload.hints)
+/** Plans differ when a day's date, or the ordered set of places in a day, changed. */
+function sameDays(a: TripDay[], b: TripDay[]) {
+  if (a.length !== b.length) return false
+  return a.every((day, index) => {
+    const other = b[index]
+    if (day.date !== other.date || day.places.length !== other.places.length) return false
+    return day.places.every((place, placeIndex) => {
+      const next = other.places[placeIndex]
+      return place.id === next.id && place.name === next.name
+    })
+  })
 }
 
 function needsReply(messages: ChatMessage[]) {
@@ -197,11 +252,15 @@ function needsReply(messages: ChatMessage[]) {
   return role === "user" || role === "system"
 }
 
-export function chatTitle(chat: Chat, t: { untitled: string }) {
-  const custom = chat.name?.trim()
+export function tripTitle(trip: Trip, t: { untitled: string }) {
+  const custom = trip.name.trim()
   if (custom) return custom
-  const place = tripPlace(chat)
+  const place = tripPlace(trip)
   return place ? place.city : t.untitled
+}
+
+export function latestPlan(trip: Trip): TripPlan | null {
+  return trip.plans.at(-1) ?? null
 }
 
 export const useChatStore = create<ChatState>()(
@@ -212,7 +271,7 @@ export const useChatStore = create<ChatState>()(
       dark: prefersDark(),
       langChosen: false,
       darkChosen: false,
-      chats: [],
+      trips: [],
       activeId: null,
       pendingItineraryIds: [],
       failedItineraryIds: [],
@@ -231,46 +290,46 @@ export const useChatStore = create<ChatState>()(
         if (state.darkChosen || state.dark === dark) return
         set({ dark })
       },
-      createChat: () => {
-        const chat: Chat = {
+      createTrip: () => {
+        const trip: Trip = {
           id: crypto.randomUUID(),
-          cityId: null,
+          name: "",
+          details: { cityId: null, start: null, end: null, hotel: "", prefs: "" },
           place: null,
-          start: null,
-          end: null,
-          hotel: "",
-          prefs: "",
           messages: null,
-          tripDays: [],
           hints: [],
+          plans: [],
         }
-        set((state) => ({ chats: [chat, ...state.chats], activeId: chat.id }))
+        set((state) => ({ trips: [trip, ...state.trips], activeId: trip.id }))
       },
-      selectChat: (id) => set({ activeId: id }),
-      renameChat: (id, name) => {
+      selectTrip: (id) => set({ activeId: id }),
+      renameTrip: (id, name) => {
         const trimmed = name.trim()
         if (!trimmed) return
         set((state) => ({
-          chats: state.chats.map((chat) => (chat.id === id ? { ...chat, name: trimmed } : chat)),
+          trips: state.trips.map((trip) => (trip.id === id ? { ...trip, name: trimmed } : trip)),
         }))
       },
-      deleteChat: (id) =>
+      deleteTrip: (id) =>
         set((state) => {
-          const chats = state.chats.filter((chat) => chat.id !== id)
-          const activeId = state.activeId === id ? (chats[0]?.id ?? null) : state.activeId
-          return { chats, activeId }
+          const trips = state.trips.filter((trip) => trip.id !== id)
+          const activeId = state.activeId === id ? (trips[0]?.id ?? null) : state.activeId
+          return { trips, activeId }
         }),
       saveTrip: (id, value, notice) => {
-        const text = notice?.trim() ?? ""
+        const text = notice?.text.trim() ?? ""
         if (text) invalidateReply(id)
-        const system: ChatMessage | null = text
-          ? { id: crypto.randomUUID(), role: "system", text }
-          : null
+        const system: ChatMessage | null = notice && text ? { id: crypto.randomUUID(), role: "system", text, update: notice.update } : null
         set((state) => ({
-          chats: state.chats.map((chat) => {
-            if (chat.id !== id) return chat
-            const messages = chat.messages ?? []
-            return { ...chat, ...value, messages: system ? [...messages, system] : messages }
+          trips: state.trips.map((trip) => {
+            if (trip.id !== id) return trip
+            const messages = trip.messages ?? []
+            return {
+              ...trip,
+              place: value.place,
+              details: value.details,
+              messages: system ? [...messages, system] : messages,
+            }
           }),
         }))
       },
@@ -283,14 +342,14 @@ export const useChatStore = create<ChatState>()(
           text: trimmed,
         }
         set((state) => ({
-          chats: state.chats.map((chat) =>
-            chat.id === id ? { ...chat, messages: [...(chat.messages ?? []), message] } : chat,
+          trips: state.trips.map((trip) =>
+            trip.id === id ? { ...trip, messages: [...(trip.messages ?? []), message] } : trip,
           ),
         }))
       },
       beginItinerary: (id) => {
-        const chat = get().chats.find((item) => item.id === id)
-        if (!chat || chat.messages === null || !needsReply(chat.messages) || repliesInFlight.has(id)) return null
+        const trip = get().trips.find((item) => item.id === id)
+        if (!trip || trip.messages === null || !needsReply(trip.messages) || repliesInFlight.has(id)) return null
         repliesInFlight.add(id)
         const token = replyToken(id)
         set((state) => ({
@@ -307,17 +366,21 @@ export const useChatStore = create<ChatState>()(
           role: "ai",
           text,
         }
-        const incoming = daysFromReply(text)
-        const hints = hintsFromReply(text)
+        const { days, hints } = parseReply(text)
         set((state) => ({
           pendingItineraryIds: state.pendingItineraryIds.filter((item) => item !== id),
           failedItineraryIds: state.failedItineraryIds.filter((item) => item !== id),
-          chats: state.chats.map((chat) => {
-            if (chat.id !== id || chat.messages === null) return chat
+          trips: state.trips.map((trip) => {
+            if (trip.id !== id || trip.messages === null) return trip
+            const latest = latestPlan(trip)
+            const changed = days.length > 0 && (!latest || !sameDays(latest.days, days))
+            const plan: TripPlan | null = changed
+              ? { date: new Date().toISOString(), start: trip.details.start, end: trip.details.end, days }
+              : null
             return {
-              ...chat,
-              messages: [...chat.messages, reply],
-              tripDays: incoming.length > 0 ? incoming : chat.tripDays,
+              ...trip,
+              messages: [...trip.messages, reply],
+              plans: plan ? [...trip.plans, plan] : trip.plans,
               hints,
             }
           }),
@@ -333,10 +396,22 @@ export const useChatStore = create<ChatState>()(
       },
     }),
     {
-      name: "city-explorer-chats",
+      name: STORAGE_KEY,
+      // Version 1 introduced `city-explorer-trips`. Data still stored under the
+      // legacy key is read once, converted in `merge` and written to the new key.
+      version: 1,
+      storage: createJSONStorage(() => ({
+        getItem: (name) => localStorage.getItem(name) ?? localStorage.getItem(LEGACY_STORAGE_KEY),
+        setItem: (name, value) => {
+          localStorage.setItem(name, value)
+          localStorage.removeItem(LEGACY_STORAGE_KEY)
+        },
+        removeItem: (name) => localStorage.removeItem(name),
+      })),
+      migrate: (persisted) => persisted as PersistedChatState,
       partialize: (state): PersistedChatState => {
         const persisted: PersistedChatState = {
-          chats: state.chats,
+          trips: state.trips,
           activeId: state.activeId,
         }
         if (state.langChosen) persisted.lang = state.lang
@@ -344,21 +419,24 @@ export const useChatStore = create<ChatState>()(
         return persisted
       },
       merge: (persisted, current) => {
-        const data = persisted && typeof persisted === "object" ? (persisted as Partial<PersistedChatState>) : {}
+        const data = persisted && typeof persisted === "object" ? (persisted as Partial<PersistedChatState> & { chats?: unknown }) : {}
         const savedLang = data.lang === "ru" || data.lang === "en" ? data.lang : null
         const savedDark = typeof data.dark === "boolean" ? data.dark : null
         const activeId = typeof data.activeId === "string" || data.activeId === null ? data.activeId : current.activeId
+        const saved = Array.isArray(data.trips) ? { items: data.trips as unknown[], parse: parseTrip } : Array.isArray(data.chats) ? { items: data.chats, parse: parseLegacyChat } : null
         return {
           ...current,
-          lang: current.langChosen ? current.lang : savedLang ?? systemLang(),
-          dark: current.darkChosen ? current.dark : savedDark ?? prefersDark(),
+          lang: current.langChosen ? current.lang : (savedLang ?? systemLang()),
+          dark: current.darkChosen ? current.dark : (savedDark ?? prefersDark()),
           langChosen: current.langChosen || savedLang !== null,
           darkChosen: current.darkChosen || savedDark !== null,
           activeId,
-          chats: Array.isArray(data.chats) ? data.chats.flatMap((item) => {
-            const chat = parseChat(item)
-            return chat ? [chat] : []
-          }) : current.chats,
+          trips: saved
+            ? saved.items.flatMap((item) => {
+                const trip = saved.parse(item)
+                return trip ? [trip] : []
+              })
+            : current.trips,
         }
       },
       onRehydrateStorage: () => (state, error) => {

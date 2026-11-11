@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { ChatI, Chev, Compass, MapI } from "@/components/icons"
-import { ChatView, Sidebar, TripForm } from "@/features/trips"
-import { MapDaySelect, MapView } from "@/features/map"
+import { ChatView, Sidebar, TripForm, type TripTab } from "@/features/trips"
+import { MapDaySelect, MapView, type MapPlaceRequest } from "@/features/map"
 import { useMediaQuery } from "@/hooks/use-media-query"
 import { tr } from "@/lib/i18n"
-import { chatTitle, useChatStore } from "@/stores/chat-store"
+import { latestPlan, tripTitle, useChatStore } from "@/stores/chat-store"
 import { rangeLabel } from "@/utils/dates"
 import { tripPlace } from "@/utils/place"
 
@@ -16,14 +16,14 @@ export function WorkspacePage() {
   const hydrated = useChatStore((state) => state.hasHydrated)
   const lang = useChatStore((state) => state.lang)
   const dark = useChatStore((state) => state.dark)
-  const chats = useChatStore((state) => state.chats)
+  const trips = useChatStore((state) => state.trips)
   const activeId = useChatStore((state) => state.activeId)
   const setLang = useChatStore((state) => state.setLang)
   const setDark = useChatStore((state) => state.setDark)
-  const createChat = useChatStore((state) => state.createChat)
-  const selectChat = useChatStore((state) => state.selectChat)
-  const renameChat = useChatStore((state) => state.renameChat)
-  const deleteChat = useChatStore((state) => state.deleteChat)
+  const createTrip = useChatStore((state) => state.createTrip)
+  const selectTrip = useChatStore((state) => state.selectTrip)
+  const renameTrip = useChatStore((state) => state.renameTrip)
+  const deleteTrip = useChatStore((state) => state.deleteTrip)
   const saveTrip = useChatStore((state) => state.saveTrip)
   const sendMessage = useChatStore((state) => state.sendMessage)
   const beginItinerary = useChatStore((state) => state.beginItinerary)
@@ -40,7 +40,7 @@ export function WorkspacePage() {
   const wasMobile = useRef(mobile)
 
   const t = tr(lang)
-  const chat = chats.find((item) => item.id === activeId) ?? null
+  const chat = trips.find((item) => item.id === activeId) ?? null
   const beginActiveItinerary = useCallback(() => (chat ? beginItinerary(chat.id) : null), [beginItinerary, chat])
   const finishActiveItinerary = useCallback(
     (text: string, token: number) => {
@@ -63,8 +63,13 @@ export function WorkspacePage() {
         : null,
     [chat?.messages, place],
   )
-  const tripDays = chat?.tripDays
+  const [panel, setPanel] = useState<{ tripId: string; tab: TripTab; planIndex: number | null } | null>(null)
+  const panelTab: TripTab = chat && panel?.tripId === chat.id ? panel.tab : "chat"
+  const planIndex = chat && panel?.tripId === chat.id && panel.tab === "plan" ? panel.planIndex : null
+  const shownPlan = chat ? ((planIndex != null ? chat.plans[planIndex] : null) ?? latestPlan(chat)) : null
+  const tripDays = shownPlan?.days
   const [pickedDay, setPickedDay] = useState<{ chatId: string; date: string } | null>(null)
+  const [placeRequest, setPlaceRequest] = useState<MapPlaceRequest | null>(null)
   const selectedDate =
     chat && tripDays && pickedDay?.chatId === chat.id && tripDays.some((day) => day.date === pickedDay.date)
       ? pickedDay.date
@@ -94,10 +99,10 @@ export function WorkspacePage() {
     ) : null
 
   useEffect(() => {
-    if (!hydrated || chats.length === 0) return
-    if (chats.some((item) => item.id === activeId)) return
-    selectChat(chats[0].id)
-  }, [hydrated, chats, activeId, selectChat])
+    if (!hydrated || trips.length === 0) return
+    if (trips.some((item) => item.id === activeId)) return
+    selectTrip(trips[0].id)
+  }, [hydrated, trips, activeId, selectTrip])
 
   useEffect(() => {
     const entered = mobile && !wasMobile.current
@@ -107,13 +112,13 @@ export function WorkspacePage() {
 
   if (!hydrated) return <div className="h-screen w-full bg-bg" />
 
-  const title = chat ? chatTitle(chat, t) : t.newTrip
+  const title = chat ? tripTitle(chat, t) : t.newTrip
 
   const onNew = () => {
     setEditing(false)
     setChatCollapsed(false)
     setMobilePane("chat")
-    createChat()
+    createTrip()
   }
 
   const showHistory = !mobile || mobilePane === "history"
@@ -134,19 +139,19 @@ export function WorkspacePage() {
         collapsed={mobile ? false : sidebarCollapsed}
         fill={mobile}
         className={showHistory ? "flex" : "hidden"}
-        chats={chats}
+        trips={trips}
         activeId={chat?.id ?? null}
         onToggle={() => setSidebarCollapsed((collapsed) => !collapsed)}
         onNew={onNew}
         onSelect={(id) => {
           setEditing(false)
-          selectChat(id)
+          selectTrip(id)
           if (mobile) setMobilePane("chat")
         }}
-        onRename={renameChat}
+        onRename={renameTrip}
         onDelete={(id) => {
           setEditing(false)
-          deleteChat(id)
+          deleteTrip(id)
         }}
         onLang={setLang}
         onDark={setDark}
@@ -172,8 +177,8 @@ export function WorkspacePage() {
             <div className="flex min-w-0 flex-1 items-center gap-2.5">
               <span className="text-lg">{place?.flag ?? "✦"}</span>
               <h2 className="truncate text-[15px] font-medium">{title}</h2>
-              {place && chat?.start && chat.end && !showForm && (
-                <span className="hidden truncate text-xs text-mute xl:inline">{rangeLabel(chat.start, chat.end, t)}</span>
+              {place && chat?.details.start && chat.details.end && !showForm && (
+                <span className="hidden truncate text-xs text-mute xl:inline">{rangeLabel(chat.details.start, chat.details.end, t)}</span>
               )}
             </div>
             <button
@@ -190,7 +195,7 @@ export function WorkspacePage() {
             {chat && showForm ? (
               <TripForm
                 key={`${chat.id}-${editing}`}
-                chat={chat}
+                trip={chat}
                 t={t}
                 lang={lang}
                 editing={editing && chat.messages !== null}
@@ -203,9 +208,19 @@ export function WorkspacePage() {
             ) : chat ? (
               <ChatView
                 key={chat.id}
-                chat={chat}
+                trip={chat}
                 t={t}
                 lang={lang}
+                tab={panelTab}
+                onTab={(tab) => setPanel({ tripId: chat.id, tab, planIndex: null })}
+                planIndex={planIndex}
+                onPlanIndex={(index) => setPanel({ tripId: chat.id, tab: "plan", planIndex: index })}
+                onPlace={(date, placeId) => {
+                  setPickedDay({ chatId: chat.id, date })
+                  setPlaceRequest((current) => ({ id: placeId, seq: (current?.seq ?? 0) + 1 }))
+                  if (mobile) setMobilePane("map")
+                  else setChatCollapsed(false)
+                }}
                 onSend={(text) => sendMessage(chat.id, text)}
                 onEdit={() => setEditing(true)}
                 itineraryPending={pendingItineraryIds.includes(chat.id)}
@@ -239,7 +254,7 @@ export function WorkspacePage() {
           aria-hidden={!showMap}
           className={`relative h-full min-h-0 min-w-0 overflow-hidden ${showMap ? "flex-1" : "hidden"} ${mobile ? "w-full" : "rounded-2xl border border-line shadow-sm"}`}
         >
-          <MapView dark={dark} t={t} focus={mapFocus} day={selectedDate} stops={mapStops} frameOffset={mobile ? 0 : undefined} />
+          <MapView dark={dark} t={t} focus={mapFocus} day={selectedDate} stops={mapStops} openPlace={placeRequest} frameOffset={mobile ? 0 : undefined} />
           {(mobile ? showMap : chatCollapsed) ? (
             <div className="absolute top-4 left-4 z-10 flex items-center gap-2">
               {mobile ? (

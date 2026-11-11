@@ -5,17 +5,17 @@ import { Compass, Pin } from "@/components/icons"
 import { Combobox, ComboboxContent, ComboboxEmpty, ComboboxInput, ComboboxItem, ComboboxList } from "@/components/ui/combobox"
 import { useDebounced } from "@/hooks/use-debounced"
 import type { Dict } from "@/lib/i18n"
-import type { Chat, TripDetails } from "@/types/chat"
+import type { SettingsNotice, Trip, TripSettings } from "@/types/chat"
 import type { Lang } from "@/types/lang"
 import type { Place } from "@/types/place"
 import { tripPlace } from "@/utils/place"
 
 import { suggestLocations } from "../api/suggest-locations"
-import { settingsUpdateMessage } from "../utils/settings-update"
+import { settingsUpdateNotice } from "../utils/settings-update"
 import { DatePicker } from "./date-picker"
 
-function placeFromChat(chat: Chat): Place | null {
-  const current = tripPlace(chat)
+function placeFromTrip(trip: Trip): Place | null {
+  const current = tripPlace(trip)
   if (!current) return null
   return {
     id: current.id,
@@ -29,27 +29,27 @@ function placeFromChat(chat: Chat): Place | null {
 }
 
 export function TripForm({
-  chat,
+  trip,
   t,
   lang,
   editing,
   onSubmit,
   onCancel,
 }: {
-  chat: Chat
+  trip: Trip
   t: Dict
   lang: Lang
   editing?: boolean
-  onSubmit: (value: TripDetails, notice?: string | null) => void
+  onSubmit: (value: TripSettings, notice?: SettingsNotice | null) => void
   onCancel?: () => void
 }) {
-  const [place, setPlace] = useState<Place | null>(() => placeFromChat(chat))
-  const [query, setQuery] = useState(() => placeFromChat(chat)?.city ?? "")
+  const [place, setPlace] = useState<Place | null>(() => placeFromTrip(trip))
+  const [query, setQuery] = useState(() => placeFromTrip(trip)?.city ?? "")
   const [open, setOpen] = useState(false)
-  const [start, setStart] = useState(chat.start)
-  const [end, setEnd] = useState(chat.end)
-  const [hotel, setHotel] = useState(chat.hotel)
-  const [prefs, setPrefs] = useState(chat.prefs)
+  const [start, setStart] = useState(trip.details.start)
+  const [end, setEnd] = useState(trip.details.end)
+  const [hotel, setHotel] = useState(trip.details.hotel)
+  const [prefs, setPrefs] = useState(trip.details.prefs)
   const [tried, setTried] = useState(false)
   const debounced = useDebounced(query.trim(), 250)
   const suggestionsQuery = useQuery({
@@ -65,15 +65,16 @@ export function TripForm({
 
   const cityError = tried && !editing && !selected
   const dateError = tried && !(start && end)
-  const changed = start !== chat.start || end !== chat.end || hotel.trim() !== chat.hotel.trim() || prefs.trim() !== chat.prefs.trim()
+  const current = trip.details
+  const changed = start !== current.start || end !== current.end || hotel.trim() !== current.hotel.trim() || prefs.trim() !== current.prefs.trim()
 
   const submit = (event: FormEvent) => {
     event.preventDefault()
     if (editing && !changed) return
     setTried(true)
     if (place && (editing || selected) && start && end) {
-      const value = { cityId: place.id, place, start, end, hotel: hotel.trim(), prefs: prefs.trim() }
-      onSubmit(value, editing ? settingsUpdateMessage(chat, value) : null)
+      const details = { cityId: place.id, start, end, hotel: hotel.trim(), prefs: prefs.trim() }
+      onSubmit({ place, details }, editing ? settingsUpdateNotice(current, details) : null)
     }
   }
 

@@ -6,7 +6,7 @@ import "maplibre-gl/dist/maplibre-gl.css"
 import { Cross, Minus, Plus } from "@/components/icons"
 import type { Dict } from "@/lib/i18n"
 
-import type { MapFocus, MapStop } from "../types"
+import type { MapFocus, MapPlaceRequest, MapStop } from "../types"
 
 setWorkerUrl("/maplibre-gl-worker.mjs")
 
@@ -164,6 +164,7 @@ export function MapView({
   focus,
   day,
   stops,
+  openPlace = null,
   frameOffset = MAP_FRAME_OFFSET,
 }: {
   dark: boolean
@@ -171,6 +172,8 @@ export function MapView({
   focus: MapFocus | null
   day: string
   stops: MapStop[]
+  /** Opens the popup of the stop with this id once it is on the map. */
+  openPlace?: MapPlaceRequest | null
   frameOffset?: number
 }) {
   const mapRef = useRef<MapRef>(null)
@@ -240,6 +243,23 @@ export function MapView({
     }
     if (focusChanged) moveTo(map, focus, instant ? 0 : 900)
   }, [ready, key, focus, routeKey, stops])
+
+  // Runs after the framing effect above, which closes the popup when the day changes.
+  const handledRequest = useRef(0)
+  useLayoutEffect(() => {
+    const map = mapRef.current?.getMap()
+    if (!ready || !map || !openPlace || handledRequest.current === openPlace.seq) return
+    const index = stops.findIndex((stop) => stop.id === openPlace.id)
+    if (index < 0) return
+    handledRequest.current = openPlace.seq
+    // The request can only be served once the map is ready and the new day is framed.
+    // oxlint-disable-next-line react/set-state-in-effect
+    setOpenIndex(index)
+    const stop = stops[index]
+    if (!map.isMoving() && !map.getBounds().contains([stop.longitude, stop.latitude])) {
+      map.easeTo({ center: [stop.longitude, stop.latitude], duration: 600 })
+    }
+  }, [ready, openPlace, stops])
 
   useLayoutEffect(() => {
     const map = mapRef.current?.getMap()

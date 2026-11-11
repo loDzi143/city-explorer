@@ -1,9 +1,24 @@
 import type { Place } from "@/types/place"
 
+/** Trip settings changed by the user, with their new values. Only changed fields are present. */
+export type TripUpdate = {
+  dates?: { start: string | null; end: string | null }
+  hotel?: string
+  prefs?: string
+}
+
 export type ChatMessage = {
   id: string
   role: "user" | "ai" | "system"
+  /** Text sent to the model. */
   text: string
+  /** For a system message about changed trip settings: what to show the user. */
+  update?: TripUpdate
+}
+
+export type SettingsNotice = {
+  text: string
+  update: TripUpdate
 }
 
 export type TripDay = {
@@ -19,18 +34,35 @@ export type TripDay = {
   }[]
 }
 
-export type Chat = {
-  id: string
+export type TripDetails = {
   cityId: string | null
-  place: Place | null
   start: string | null
   end: string | null
   hotel: string
   prefs: string
-  messages: ChatMessage[] | null
-  tripDays: TripDay[]
-  hints: string[]
-  name?: string
 }
 
-export type TripDetails = Pick<Chat, "cityId" | "place" | "start" | "end" | "hotel" | "prefs">
+export type TripPlan = {
+  /** ISO date and time when the plan was saved. */
+  date: string
+  /** Trip start (YYYY-MM-DD) from the trip details at save time. */
+  start: string | null
+  /** Trip end (YYYY-MM-DD) from the trip details at save time. */
+  end: string | null
+  days: TripDay[]
+}
+
+export type Trip = {
+  id: string
+  name: string
+  details: TripDetails
+  place: Place | null
+  messages: ChatMessage[] | null
+  hints: string[]
+  plans: TripPlan[]
+}
+
+export type TripSettings = {
+  place: Place
+  details: TripDetails
+}
