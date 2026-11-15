@@ -1,23 +1,27 @@
 import { readEnv } from "@/config/env"
 import type { ChatCompletion, LlmUsage, ModelMessage, ToolCall, ToolDefinition } from "@/modules/ai/llm/chat.types"
-import type { ChatProvider } from "@/modules/ai/llm/providers/chat.provider"
-import { AppError } from "@/shared/errors/app-error"
+import { LlmError } from "@/modules/ai/llm/llm-error"
+import type { ChatProvider, CompletionOptions } from "@/modules/ai/llm/providers/chat.provider"
+import { isRecord } from "@/shared/lib/is-record"
+
+// Reasoning models routed through OpenRouter can take a minute on a long prompt before the first token.
+const REQUEST_TIMEOUT_MS = 120_000
 
 export const openRouterProvider: ChatProvider = {
-  async complete(messages: ModelMessage[], tools: ToolDefinition[] = []): Promise<ChatCompletion> {
+  async complete(messages: ModelMessage[], tools: ToolDefinition[] = [], options: CompletionOptions = {}): Promise<ChatCompletion> {
     const {
       OPENROUTER_API_KEY: key,
       OPENROUTER_MODEL: model,
       OPENROUTER_COMPLETIONS_URL: url,
     } = readEnv()
     if (!key) {
-      throw new AppError("OPENROUTER_API_KEY is not configured", 502, "LLM is unavailable")
+      throw new LlmError("OPENROUTER_API_KEY is not configured", { retryable: false })
     }
     if (!model) {
-      throw new AppError("OPENROUTER_MODEL is not configured", 502, "LLM is unavailable")
+      throw new LlmError("OPENROUTER_MODEL is not configured", { retryable: false })
     }
     if (!url) {
-      throw new AppError("OPENROUTER_COMPLETIONS_URL is not configured", 502, "LLM is unavailable")
+      throw new LlmError("OPENROUTER_COMPLETIONS_URL is not configured", { retryable: false })
     }
 
     let response: Response
@@ -31,14 +35,14 @@ export const openRouterProvider: ChatProvider = {
         body: JSON.stringify({
           model,
           messages: messages.map(toApiMessage),
-          ...(tools.length > 0 ? { tools: tools.map(toApiTool), tool_choice: "auto" } : {}),
+          ...(tools.length > 0 ? { tools: tools.map(toApiTool), tool_choice: options.toolChoice ?? "auto" } : {}),
         }),
         cache: "no-store",
-        signal: AbortSignal.timeout(60_000),
+        signal: AbortSignal.timeout(requestTimeout(options.deadline)),
       })
     } catch (error) {
       const message = isTimeoutError(error) ? "OpenRouter request timed out" : "OpenRouter request failed: network error"
-      throw new AppError(message, 502, "LLM is unavailable")
+      throw new LlmError(message, { retryable: true })
     }
 
     if (!response.ok) {
@@ -46,27 +50,41 @@ export const openRouterProvider: ChatProvider = {
       const message = detail
         ? `OpenRouter request failed with status ${response.status}: ${detail}`
         : `OpenRouter request failed with status ${response.status}`
-      throw new AppError(message, response.status === 400 ? 400 : 502, "LLM is unavailable")
+      // Rate limits and upstream failures pass; a bad request, key or credit balance does not.
+      const retryable = response.status === 408 || response.status === 429 || response.status >= 500
+      throw new LlmError(message, { retryable, status: response.status === 400 ? 400 : 502 })
     }
 
     let payload: unknown
     try {
       payload = await response.json()
     } catch {
-      throw new AppError("OpenRouter response is invalid", 502, "LLM is unavailable")
+      throw new LlmError("OpenRouter response is invalid", { retryable: true })
     }
 
     const message = completionMessage(payload)
     if (!message) {
-      throw new AppError("OpenRouter response is empty", 502, "LLM is unavailable")
+      throw new LlmError(`OpenRouter response is empty${errorSuffix(payload)}`, { retryable: true })
     }
     const content = textContent(message.content)
     const toolCalls = toolCallsOf(message)
     if (!content && toolCalls.length === 0) {
-      throw new AppError("OpenRouter response is empty", 502, "LLM is unavailable")
+      throw new LlmError(`OpenRouter response is empty${errorSuffix(payload)}`, { retryable: true })
     }
     return { content, toolCalls, usage: completionUsage(payload) }
   },
+}
+
+/** The per-request timeout, shortened when the caller's overall deadline is closer. */
+function requestTimeout(deadline: number | undefined) {
+  if (deadline === undefined) return REQUEST_TIMEOUT_MS
+  return Math.max(1, Math.min(REQUEST_TIMEOUT_MS, deadline - Date.now()))
+}
+
+/** OpenRouter reports some upstream failures inside a 200 response. */
+function errorSuffix(payload: unknown) {
+  if (!isRecord(payload) || !isRecord(payload.error)) return ""
+  return typeof payload.error.message === "string" ? `: ${safeErrorDetail(payload.error.message)}` : ""
 }
 
 function toApiMessage(message: ModelMessage) {
@@ -189,8 +207,4 @@ function textContent(content: unknown): string | null {
     .join("")
     .trim()
   return text || null
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null
 }

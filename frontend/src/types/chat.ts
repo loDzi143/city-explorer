@@ -10,15 +10,10 @@ export type TripUpdate = {
 export type ChatMessage = {
   id: string
   role: "user" | "ai" | "system"
-  /** Text sent to the model. */
+  /** Message text. Empty for a settings change; older guest data kept the model instruction here. */
   text: string
-  /** For a system message about changed trip settings: what to show the user. */
+  /** For a system message about changed trip settings: what changed. */
   update?: TripUpdate
-}
-
-export type SettingsNotice = {
-  text: string
-  update: TripUpdate
 }
 
 export type TripDay = {
@@ -70,6 +65,9 @@ export type Trip = {
   plans: TripPlan[]
   /** Latest conversationContext from the model, null before the first reply. */
   conversationContext: ConversationContext | null
+  /** Account trips only: server change counter and last change time, used to ignore stale responses. */
+  version?: number
+  updatedAt?: string
 }
 
 export type TripSettings = {

@@ -1,11 +1,14 @@
 import { z } from "zod"
 
+import { isNearDestination } from "@/modules/ai/agents/place-check"
+import type { ToolDefinition } from "@/modules/ai/llm/chat.types"
 import { geocodingService } from "@/modules/geocoding/geocoding.service"
 import type { ResolvedPlace } from "@/modules/geocoding/geocoding.types"
-import type { ToolDefinition } from "@/modules/ai/llm/chat.types"
+import { AppError } from "@/shared/errors/app-error"
 
 const MAX_PLACES = 200
 const MAX_ARGUMENTS = 20_000
+const INVALID_ARGUMENTS = "Invalid geocode_places arguments"
 
 const dayIndexSchema = z.union([
   z.number().int().nonnegative(),
@@ -89,33 +92,46 @@ export async function executeGeocodePlaces(
   const payload = parseToolInput(input)
   if (!payload.ok) return { error: payload.error }
 
-  const matches = await geocodingService.geocodePlaces({
-    places: payload.data.places.map((place) => ({
-      name: place.name,
-      ...(place.searchName ? { searchName: place.searchName } : {}),
-    })),
-    city: destination.city,
-    country: destination.country,
-    latitude: destination.latitude,
-    longitude: destination.longitude,
-  })
+  let matches: ResolvedPlace[]
+  try {
+    matches = await geocodingService.geocodePlaces({
+      places: payload.data.places.map((place) => ({
+        name: place.name,
+        ...(place.searchName ? { searchName: place.searchName } : {}),
+      })),
+      city: destination.city,
+      country: destination.country,
+      latitude: destination.latitude,
+      longitude: destination.longitude,
+    })
+  } catch (error) {
+    // The geocoder refused these names (not an outage): the model can rephrase, the user can't.
+    if (error instanceof AppError && error.status === 400) return { error: INVALID_ARGUMENTS }
+    throw error
+  }
 
-  return payload.data.places.map((place, index) => toGeocodedPlace(place, matches[index]))
+  return payload.data.places.map((place, index) => toGeocodedPlace(place, nearDestination(matches[index], destination)))
+}
+
+/** A match far from the destination is another place with the same name, not the one that was asked for. */
+function nearDestination(match: ResolvedPlace | undefined, destination: GeocodeDestination): ResolvedPlace | undefined {
+  if (match?.status !== "found" || isNearDestination(match.coordinates, destination)) return match
+  return { status: "not_found" }
 }
 
 function parseToolInput(input: unknown): { ok: true; data: GeocodePlacesInput } | { ok: false; error: string } {
   let payload = input
   if (typeof input === "string") {
-    if (input.length > MAX_ARGUMENTS) return { ok: false, error: "Invalid geocode_places arguments" }
+    if (input.length > MAX_ARGUMENTS) return { ok: false, error: INVALID_ARGUMENTS }
     try {
       payload = JSON.parse(input)
     } catch {
-      return { ok: false, error: "Invalid geocode_places arguments" }
+      return { ok: false, error: INVALID_ARGUMENTS }
     }
   }
 
   const parsed = geocodePlacesInputSchema.safeParse(payload)
-  if (!parsed.success) return { ok: false, error: "Invalid geocode_places arguments" }
+  if (!parsed.success) return { ok: false, error: INVALID_ARGUMENTS }
   return { ok: true, data: parsed.data }
 }
 

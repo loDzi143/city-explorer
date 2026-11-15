@@ -49,7 +49,8 @@ function separateRules(text: string) {
 export function MarkdownMessage({ text }: { text: string }) {
   return (
     <div className={markdownClass}>
-      <Markdown remarkPlugins={[remarkBreaks]} components={{ a: MarkdownLink }}>
+      {/* The text is written by the model: an image would make the browser call whatever address it names. */}
+      <Markdown remarkPlugins={[remarkBreaks]} components={{ a: MarkdownLink }} disallowedElements={["img"]}>
         {separateRules(text)}
       </Markdown>
     </div>

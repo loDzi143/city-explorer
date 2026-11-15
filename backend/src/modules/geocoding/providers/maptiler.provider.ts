@@ -2,6 +2,7 @@ import { readEnv } from "@/config/env"
 import { AppError } from "@/shared/errors/app-error"
 import type { GeocodingProvider } from "@/modules/geocoding/providers/geocoding.provider"
 import type { GeocodePlaceQuery, GeocodePlacesQuery, LocationSuggestion, PlaceCandidate } from "@/modules/geocoding/geocoding.types"
+import { isRecord } from "@/shared/lib/is-record"
 
 const PLACE_LIMIT = 3
 const PLACE_BATCH_SIZE = 50
@@ -45,7 +46,7 @@ export const mapTilerProvider: GeocodingProvider = {
       const payload = await mapTilerJson(placeBatchUrl(geocodingUrl, key, chunk, query), 15_000)
       const candidates = placeBatches(payload, chunk.length)
       if (!candidates) {
-        throw new AppError("MapTiler geocoding response is invalid", 502, "Geocoding is unavailable")
+        throw new AppError("MapTiler geocoding response is invalid", 502, "Geocoding is unavailable", "geocoding_unavailable")
       }
       batches.push(...candidates)
     }
@@ -57,10 +58,10 @@ export const mapTilerProvider: GeocodingProvider = {
 function mapTilerConfig() {
   const { MAPTILER_KEY: key, GEOCODING_URL: geocodingUrl } = readEnv()
   if (!key) {
-    throw new AppError("MAPTILER_KEY is not configured", 502, "Geocoding is unavailable")
+    throw new AppError("MAPTILER_KEY is not configured", 502, "Geocoding is unavailable", "geocoding_unavailable")
   }
   if (!geocodingUrl) {
-    throw new AppError("GEOCODING_URL is not configured", 502, "Geocoding is unavailable")
+    throw new AppError("GEOCODING_URL is not configured", 502, "Geocoding is unavailable", "geocoding_unavailable")
   }
   return { key, geocodingUrl }
 }
@@ -70,18 +71,18 @@ async function mapTilerJson(url: URL, timeout: number) {
   try {
     response = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(timeout) })
   } catch {
-    throw new AppError("MapTiler geocoding request failed", 502, "Geocoding is unavailable")
+    throw new AppError("MapTiler geocoding request failed", 502, "Geocoding is unavailable", "geocoding_unavailable")
   }
 
   if (!response.ok) {
     const status = response.status === 400 ? 400 : 502
-    throw new AppError("MapTiler geocoding request failed", status, "Geocoding is unavailable")
+    throw new AppError("MapTiler geocoding request failed", status, "Geocoding is unavailable", "geocoding_unavailable")
   }
 
   try {
     return await response.json()
   } catch {
-    throw new AppError("MapTiler geocoding response is invalid", 502, "Geocoding is unavailable")
+    throw new AppError("MapTiler geocoding response is invalid", 502, "Geocoding is unavailable", "geocoding_unavailable")
   }
 }
 
@@ -252,8 +253,4 @@ function cityBbox(value: unknown): [number, number, number, number] | null {
   if (width < 0.02 && height < 0.02) return null
   if (width > 4 || height > 4) return null
   return bbox
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null
 }

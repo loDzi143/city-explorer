@@ -1,22 +1,41 @@
 import { create } from "zustand"
-import { createJSONStorage, persist } from "zustand/middleware"
 
-import type { ChatMessage, ConversationContext, SettingsNotice, Trip, TripDay, TripDetails, TripPlan, TripSettings, TripUpdate } from "@/types/chat"
+import { apiFailure, failureCode, isUnauthorized } from "@/lib/api"
+import { saveAccountSettings } from "@/lib/auth-client"
+import { createAccountTripRepository } from "@/lib/repositories/account-trip-repository"
+import { readGuestSnapshot, writeGuestSnapshot, type GuestSnapshot } from "@/lib/repositories/guest-storage"
+import { createGuestTripRepository } from "@/lib/repositories/guest-trip-repository"
+import type { TripReducer, TripRepository } from "@/lib/repositories/trip-repository"
+import type { AccountSettings, StorageMode } from "@/types/account"
+import type { ChatMessage, Trip, TripPlan, TripSettings } from "@/types/chat"
 import type { Lang } from "@/types/lang"
-import { isPlace, tripPlace } from "@/utils/place"
+import { tripPlace } from "@/utils/place"
+import { needsReply } from "@/utils/trip-messages"
+import { tripUpdate } from "@/utils/trip-update"
 
-const STORAGE_KEY = "city-explorer-trips"
-const LEGACY_STORAGE_KEY = "city-explorer-chats"
+/** A change that was applied on screen but couldn't be saved on the server. */
+export type SyncError = {
+  /** No connection, as opposed to the server refusing or failing. */
+  offline: boolean
+}
 
 type ChatState = {
+  /** The workspace has data to show: guest data is read or account data is loaded. */
   hasHydrated: boolean
+  mode: StorageMode
   lang: Lang
   dark: boolean
   langChosen: boolean
   darkChosen: boolean
   trips: Trip[]
   activeId: string | null
-  setHasHydrated: (hasHydrated: boolean) => void
+  pendingItineraryIds: string[]
+  failedItineraryIds: string[]
+  syncError: SyncError | null
+  enterGuest: () => void
+  enterAccount: (settings: AccountSettings, trips: Trip[]) => void
+  /** Hides the workspace while another mode's data is loading. */
+  suspend: () => void
   setLang: (lang: Lang) => void
   setDark: (dark: boolean) => void
   followSystemLang: () => void
@@ -25,22 +44,29 @@ type ChatState = {
   selectTrip: (id: string) => void
   renameTrip: (id: string, name: string) => void
   deleteTrip: (id: string) => void
-  saveTrip: (id: string, value: TripSettings, notice?: SettingsNotice | null) => void
+  saveTrip: (id: string, value: TripSettings) => void
   sendMessage: (id: string, text: string) => void
-  pendingItineraryIds: string[]
-  failedItineraryIds: string[]
-  beginItinerary: (id: string) => number | null
-  finishItinerary: (id: string, text: string, token: number) => void
-  failItinerary: (id: string, token?: number) => void
+  /** Asks for the assistant reply when the trip has unanswered messages (or none yet). */
+  requestReply: (id: string) => void
+  retrySync: () => void
 }
 
-type PersistedChatState = Pick<ChatState, "trips" | "activeId"> & {
-  lang?: Lang
-  dark?: boolean
-}
+const guestRepository = createGuestTripRepository()
+let repository: TripRepository = guestRepository
 
+// Bumped on every mode switch: results of requests started in the previous mode are dropped.
+let epoch = 0
 const repliesInFlight = new Set<string>()
 const replyTokens = new Map<string, number>()
+let failedWrites: (() => void)[] = []
+// True while guest data is being loaded into the store, so loading never writes it back.
+let loadingGuestData = false
+let onUnauthorized: () => void = () => {}
+
+/** Called when the API reports that the session is gone (expired or revoked elsewhere). */
+export function setUnauthorizedHandler(handler: () => void) {
+  onUnauthorized = handler
+}
 
 function replyToken(id: string) {
   return replyTokens.get(id) ?? 0
@@ -49,6 +75,13 @@ function replyToken(id: string) {
 function invalidateReply(id: string) {
   replyTokens.set(id, replyToken(id) + 1)
   repliesInFlight.delete(id)
+}
+
+function resetRequests() {
+  epoch += 1
+  repliesInFlight.clear()
+  replyTokens.clear()
+  failedWrites = []
 }
 
 function systemLang(): Lang {
@@ -65,249 +98,10 @@ function prefersDark() {
   return typeof window !== "undefined" && window.matchMedia("(prefers-color-scheme: dark)").matches
 }
 
-function isDateOrNull(value: unknown): value is string | null {
-  return typeof value === "string" || value === null
-}
-
-function readMessageText(value: unknown): string | null {
-  if (typeof value === "string") return value
-  if (!value || typeof value !== "object") return null
-  const text = value as { en?: unknown; ru?: unknown }
-  const en = typeof text.en === "string" ? text.en : null
-  const ru = typeof text.ru === "string" ? text.ru : null
-  if (en === null && ru === null) return null
-  return en || ru || ""
-}
-
-function readMessage(value: unknown): ChatMessage | null {
-  if (!value || typeof value !== "object") return null
-  const message = value as { id?: unknown; role?: unknown; text?: unknown; update?: unknown }
-  const text = readMessageText(message.text)
-  if (typeof message.id !== "string" || text === null) return null
-  if (message.role !== "user" && message.role !== "ai" && message.role !== "system") return null
-  const update = message.role === "system" ? readUpdate(message.update) : null
-  return update ? { id: message.id, role: message.role, text, update } : { id: message.id, role: message.role, text }
-}
-
-function readUpdate(value: unknown): TripUpdate | null {
-  if (!value || typeof value !== "object") return null
-  const raw = value as { dates?: unknown; hotel?: unknown; prefs?: unknown }
-  const update: TripUpdate = {}
-  if (raw.dates && typeof raw.dates === "object") {
-    const dates = raw.dates as { start?: unknown; end?: unknown }
-    if (isDateOrNull(dates.start) && isDateOrNull(dates.end)) update.dates = { start: dates.start, end: dates.end }
-  }
-  if (typeof raw.hotel === "string") update.hotel = raw.hotel
-  if (typeof raw.prefs === "string") update.prefs = raw.prefs
-  return Object.keys(update).length > 0 ? update : null
-}
-
-function readMessages(value: unknown): ChatMessage[] | null | undefined {
-  if (value === null) return null
-  if (!Array.isArray(value)) return undefined
-  const messages: ChatMessage[] = []
-  for (const item of value) {
-    const message = readMessage(item)
-    if (!message) return undefined
-    messages.push(message)
-  }
-  return messages
-}
-
-function readDetails(value: unknown): TripDetails | null {
-  if (!value || typeof value !== "object") return null
-  const details = value as Partial<Record<keyof TripDetails, unknown>>
-  if (!isDateOrNull(details.cityId) || !isDateOrNull(details.start) || !isDateOrNull(details.end)) return null
-  if (typeof details.hotel !== "string" || typeof details.prefs !== "string") return null
-  return { cityId: details.cityId, start: details.start, end: details.end, hotel: details.hotel, prefs: details.prefs }
-}
-
-function parseTrip(value: unknown): Trip | null {
-  if (!value || typeof value !== "object") return null
-  const trip = value as Partial<Record<keyof Trip, unknown>>
-  const details = readDetails(trip.details)
-  const messages = readMessages(trip.messages)
-  if (typeof trip.id !== "string" || !details || messages === undefined) return null
-  return {
-    id: trip.id,
-    name: typeof trip.name === "string" ? trip.name : "",
-    details,
-    place: isPlace(trip.place) ? trip.place : null,
-    messages,
-    hints: readHints(trip.hints),
-    plans: readPlans(trip.plans),
-    conversationContext: readConversationContext(trip.conversationContext),
-  }
-}
-
-/** Converts a chat saved under `city-explorer-chats` (flat details + `tripDays`). */
-function parseLegacyChat(value: unknown): Trip | null {
-  if (!value || typeof value !== "object") return null
-  const chat = value as { id?: unknown; name?: unknown; place?: unknown; messages?: unknown; hints?: unknown; tripDays?: unknown }
-  const details = readDetails(chat)
-  const messages = readMessages(chat.messages)
-  if (typeof chat.id !== "string" || !details || messages === undefined) return null
-  const days = readTripDays(chat.tripDays)
-  return {
-    id: chat.id,
-    name: typeof chat.name === "string" ? chat.name : "",
-    details,
-    place: isPlace(chat.place) ? chat.place : null,
-    messages,
-    hints: readHints(chat.hints),
-    plans: days.length > 0 ? [{ date: new Date().toISOString(), start: details.start, end: details.end, days }] : [],
-    conversationContext: null,
-  }
-}
-
-function readPlans(value: unknown): TripPlan[] {
-  if (!Array.isArray(value)) return []
-  return value.flatMap((item) => {
-    if (!item || typeof item !== "object") return []
-    const plan = item as Partial<Record<keyof TripPlan, unknown>>
-    if (typeof plan.date !== "string" || Number.isNaN(Date.parse(plan.date))) return []
-    if (!isDateOrNull(plan.start) || !isDateOrNull(plan.end)) return []
-    return [{ date: plan.date, start: plan.start, end: plan.end, days: readTripDays(plan.days) }]
-  })
-}
-
-function readTripDays(value: unknown): TripDay[] {
-  if (!Array.isArray(value)) return []
-  return value.flatMap((item) => {
-    const day = readTripDay(item)
-    return day ? [day] : []
-  })
-}
-
-function readTripDay(value: unknown): TripDay | null {
-  if (!value || typeof value !== "object") return null
-  const day = value as TripDay
-  const date = typeof day.date === "string" ? day.date.trim() : ""
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null
-  return { date, places: readTripDayPlaces(day.places) }
-}
-
-function readTripDayPlaces(value: unknown): TripDay["places"] {
-  if (!Array.isArray(value)) return []
-  return value.flatMap((item) => {
-    const place = readTripDayPlace(item)
-    return place ? [place] : []
-  })
-}
-
-function readTripDayPlace(value: unknown): TripDay["places"][number] | null {
-  if (!value || typeof value !== "object") return null
-  const place = value as TripDay["places"][number]
-  const latitude = place.coordinates?.latitude
-  const longitude = place.coordinates?.longitude
-  const id = typeof place.id === "string" ? place.id.trim() : ""
-  const name = typeof place.name === "string" ? place.name.trim() : ""
-  if (!id || !name) return null
-  if (typeof place.description !== "string") return null
-  if (typeof latitude !== "number" || !Number.isFinite(latitude)) return null
-  if (typeof longitude !== "number" || !Number.isFinite(longitude)) return null
-  return {
-    id,
-    name,
-    description: place.description,
-    coordinates: { latitude, longitude },
-  }
-}
-
-function readHints(value: unknown): string[] {
-  if (!Array.isArray(value)) return []
-  return value.flatMap((item) => {
-    if (typeof item !== "string") return []
-    const hint = item.trim()
-    return hint ? [hint] : []
-  })
-}
-
-function readConversationContext(value: unknown): ConversationContext | null {
-  if (!value || typeof value !== "object") return null
-  const raw = value as Partial<Record<keyof ConversationContext, unknown>>
-  const text = (item: unknown) => (typeof item === "string" && item.trim() ? item.trim() : null)
-  return {
-    activeTopic: text(raw.activeTopic),
-    pendingQuestion: text(raw.pendingQuestion),
-    discussedOptions: readHints(raw.discussedOptions),
-    unresolvedReferences: readHints(raw.unresolvedReferences),
-  }
-}
-
-type ReplySettings = Partial<Pick<TripDetails, "start" | "end" | "hotel" | "prefs">>
-
-type ParsedReply = {
-  days: TripDay[]
-  hints: string[]
-  settings: ReplySettings | null
-  conversationContext: ConversationContext | null
-}
-
-function parseReply(text: string): ParsedReply {
-  const empty: ParsedReply = { days: [], hints: [], settings: null, conversationContext: null }
-  let payload: unknown
-  try {
-    payload = JSON.parse(text)
-  } catch {
-    return empty
-  }
-  if (!payload || typeof payload !== "object") return empty
-  const reply = payload as { days?: unknown; hints?: unknown; settings?: unknown; conversationContext?: unknown }
-  return {
-    days: readTripDays(reply.days),
-    hints: readHints(reply.hints),
-    settings: readReplySettings(reply.settings),
-    conversationContext: readConversationContext(reply.conversationContext),
-  }
-}
-
-function readReplySettings(value: unknown): ReplySettings | null {
-  if (!value || typeof value !== "object") return null
-  const raw = value as { start?: unknown; end?: unknown; hotel?: unknown; prefs?: unknown }
-  const isoDate = (date: unknown) => (typeof date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(date.trim()) ? date.trim() : undefined)
-  const settings: ReplySettings = {}
-  const start = isoDate(raw.start)
-  const end = isoDate(raw.end)
-  if (start) settings.start = start
-  if (end) settings.end = end
-  if (typeof raw.hotel === "string") settings.hotel = raw.hotel.trim()
-  if (typeof raw.prefs === "string") settings.prefs = raw.prefs.trim()
-  return Object.keys(settings).length > 0 ? settings : null
-}
-
-/** Applies settings the model changed in the conversation. A date change that would put start after end is ignored. */
-function applyReplySettings(details: TripDetails, settings: ReplySettings | null): TripDetails {
-  if (!settings) return details
-  const next: TripDetails = { ...details }
-  const start = settings.start ?? details.start
-  const end = settings.end ?? details.end
-  if ((settings.start || settings.end) && start && end && start <= end) {
-    next.start = start
-    next.end = end
-  }
-  if (settings.hotel !== undefined) next.hotel = settings.hotel
-  if (settings.prefs !== undefined) next.prefs = settings.prefs
-  return next
-}
-
-/** Plans differ when a day's date, or the ordered set of places in a day, changed. */
-function sameDays(a: TripDay[], b: TripDay[]) {
-  if (a.length !== b.length) return false
-  return a.every((day, index) => {
-    const other = b[index]
-    if (day.date !== other.date || day.places.length !== other.places.length) return false
-    return day.places.every((place, placeIndex) => {
-      const next = other.places[placeIndex]
-      return place.id === next.id && place.name === next.name
-    })
-  })
-}
-
-function needsReply(messages: ChatMessage[]) {
-  if (messages.length === 0) return true
-  const role = messages[messages.length - 1]?.role
-  return role === "user" || role === "system"
+function applyDocumentPreferences(lang: Lang, dark: boolean) {
+  if (typeof document === "undefined") return
+  document.documentElement.classList.toggle("dark", dark)
+  document.documentElement.lang = lang
 }
 
 export function tripTitle(trip: Trip, t: { untitled: string }) {
@@ -321,197 +115,274 @@ export function latestPlan(trip: Trip): TripPlan | null {
   return trip.plans.at(-1) ?? null
 }
 
-export const useChatStore = create<ChatState>()(
-  persist(
-    (set, get) => ({
-      hasHydrated: false,
-      lang: systemLang(),
-      dark: prefersDark(),
-      langChosen: false,
-      darkChosen: false,
-      trips: [],
-      activeId: null,
-      pendingItineraryIds: [],
-      failedItineraryIds: [],
-      setHasHydrated: (hasHydrated) => set({ hasHydrated }),
-      setLang: (lang) => set({ lang, langChosen: true }),
-      setDark: (dark) => set({ dark, darkChosen: true }),
-      followSystemLang: () => {
-        const state = get()
-        const lang = systemLang()
-        if (state.langChosen || state.lang === lang) return
-        set({ lang })
-      },
-      followSystemDark: () => {
-        const state = get()
-        const dark = prefersDark()
-        if (state.darkChosen || state.dark === dark) return
-        set({ dark })
-      },
-      createTrip: () => {
-        const trip: Trip = {
-          id: crypto.randomUUID(),
-          name: "",
-          details: { cityId: null, start: null, end: null, hotel: "", prefs: "" },
-          place: null,
-          messages: null,
-          hints: [],
-          plans: [],
-          conversationContext: null,
-        }
-        set((state) => ({ trips: [trip, ...state.trips], activeId: trip.id }))
-      },
-      selectTrip: (id) => set({ activeId: id }),
-      renameTrip: (id, name) => {
-        const trimmed = name.trim()
-        if (!trimmed) return
-        set((state) => ({
-          trips: state.trips.map((trip) => (trip.id === id ? { ...trip, name: trimmed } : trip)),
-        }))
-      },
-      deleteTrip: (id) =>
-        set((state) => {
-          const trips = state.trips.filter((trip) => trip.id !== id)
-          const activeId = state.activeId === id ? (trips[0]?.id ?? null) : state.activeId
-          return { trips, activeId }
-        }),
-      saveTrip: (id, value, notice) => {
-        const text = notice?.text.trim() ?? ""
-        if (text) invalidateReply(id)
-        const system: ChatMessage | null = notice && text ? { id: crypto.randomUUID(), role: "system", text, update: notice.update } : null
-        set((state) => ({
-          trips: state.trips.map((trip) => {
-            if (trip.id !== id) return trip
-            const messages = trip.messages ?? []
-            return {
-              ...trip,
-              place: value.place,
-              details: value.details,
-              messages: system ? [...messages, system] : messages,
-            }
-          }),
-        }))
-      },
-      sendMessage: (id, text) => {
-        const trimmed = text.trim()
-        if (!trimmed) return
-        const message: ChatMessage = {
-          id: crypto.randomUUID(),
-          role: "user",
-          text: trimmed,
-        }
-        set((state) => ({
-          trips: state.trips.map((trip) =>
-            trip.id === id ? { ...trip, messages: [...(trip.messages ?? []), message] } : trip,
-          ),
-        }))
-      },
-      beginItinerary: (id) => {
-        const trip = get().trips.find((item) => item.id === id)
-        if (!trip || trip.messages === null || !needsReply(trip.messages) || repliesInFlight.has(id)) return null
-        repliesInFlight.add(id)
-        const token = replyToken(id)
-        set((state) => ({
-          pendingItineraryIds: state.pendingItineraryIds.includes(id) ? state.pendingItineraryIds : [...state.pendingItineraryIds, id],
-          failedItineraryIds: state.failedItineraryIds.filter((item) => item !== id),
-        }))
-        return token
-      },
-      finishItinerary: (id, text, token) => {
-        if (replyToken(id) !== token) return
-        repliesInFlight.delete(id)
-        const reply: ChatMessage = {
-          id: crypto.randomUUID(),
-          role: "ai",
-          text,
-        }
-        const { days, hints, settings, conversationContext } = parseReply(text)
-        set((state) => ({
-          pendingItineraryIds: state.pendingItineraryIds.filter((item) => item !== id),
-          failedItineraryIds: state.failedItineraryIds.filter((item) => item !== id),
-          trips: state.trips.map((trip) => {
-            if (trip.id !== id || trip.messages === null) return trip
-            // Settings changed in the conversation update the trip directly, without a system message.
-            const details = applyReplySettings(trip.details, settings)
-            const latest = latestPlan(trip)
-            const changed = days.length > 0 && (!latest || !sameDays(latest.days, days))
-            const plan: TripPlan | null = changed
-              ? { date: new Date().toISOString(), start: details.start, end: details.end, days }
-              : null
-            return {
-              ...trip,
-              details,
-              messages: [...trip.messages, reply],
-              plans: plan ? [...trip.plans, plan] : trip.plans,
-              hints,
-              // A reply without a context keeps the previous one.
-              conversationContext: conversationContext ?? trip.conversationContext,
-            }
-          }),
-        }))
-      },
-      failItinerary: (id, token) => {
-        if (token != null && replyToken(id) !== token) return
-        repliesInFlight.delete(id)
-        set((state) => ({
-          pendingItineraryIds: state.pendingItineraryIds.filter((item) => item !== id),
-          failedItineraryIds: state.failedItineraryIds.includes(id) ? state.failedItineraryIds : [...state.failedItineraryIds, id],
-        }))
-      },
-    }),
-    {
-      name: STORAGE_KEY,
-      // Version 1 introduced `city-explorer-trips`. Data still stored under the
-      // legacy key is read once, converted in `merge` and written to the new key.
-      version: 1,
-      storage: createJSONStorage(() => ({
-        getItem: (name) => localStorage.getItem(name) ?? localStorage.getItem(LEGACY_STORAGE_KEY),
-        setItem: (name, value) => {
-          localStorage.setItem(name, value)
-          localStorage.removeItem(LEGACY_STORAGE_KEY)
-        },
-        removeItem: (name) => localStorage.removeItem(name),
-      })),
-      migrate: (persisted) => persisted as PersistedChatState,
-      partialize: (state): PersistedChatState => {
-        const persisted: PersistedChatState = {
-          trips: state.trips,
-          activeId: state.activeId,
-        }
-        if (state.langChosen) persisted.lang = state.lang
-        if (state.darkChosen) persisted.dark = state.dark
-        return persisted
-      },
-      merge: (persisted, current) => {
-        const data = persisted && typeof persisted === "object" ? (persisted as Partial<PersistedChatState> & { chats?: unknown }) : {}
-        const savedLang = data.lang === "ru" || data.lang === "en" ? data.lang : null
-        const savedDark = typeof data.dark === "boolean" ? data.dark : null
-        const activeId = typeof data.activeId === "string" || data.activeId === null ? data.activeId : current.activeId
-        const saved = Array.isArray(data.trips) ? { items: data.trips as unknown[], parse: parseTrip } : Array.isArray(data.chats) ? { items: data.chats, parse: parseLegacyChat } : null
-        return {
-          ...current,
-          lang: current.langChosen ? current.lang : (savedLang ?? systemLang()),
-          dark: current.darkChosen ? current.dark : (savedDark ?? prefersDark()),
-          langChosen: current.langChosen || savedLang !== null,
-          darkChosen: current.darkChosen || savedDark !== null,
-          activeId,
-          trips: saved
-            ? saved.items.flatMap((item) => {
-                const trip = saved.parse(item)
-                return trip ? [trip] : []
-              })
-            : current.trips,
-        }
-      },
-      onRehydrateStorage: () => (state, error) => {
-        if (error || !state) {
-          useChatStore.setState({ hasHydrated: true })
-          return
-        }
-        document.documentElement.classList.toggle("dark", state.dark)
-        document.documentElement.lang = state.lang
-        state.setHasHydrated(true)
-      },
+/** The guest data to store: language and theme only when the user picked them. */
+function guestSnapshot(state: ChatState): GuestSnapshot {
+  const snapshot: GuestSnapshot = { trips: state.trips, activeId: state.activeId }
+  if (state.langChosen) snapshot.lang = state.lang
+  if (state.darkChosen) snapshot.dark = state.dark
+  return snapshot
+}
+
+export const useChatStore = create<ChatState>()((set, get) => {
+  function updateTrip(id: string, reducer: TripReducer) {
+    set((state) => ({ trips: state.trips.map((trip) => (trip.id === id ? reducer(trip) : trip)) }))
+  }
+
+  function failSync(error: unknown, retry: () => void) {
+    if (isUnauthorized(error)) onUnauthorized()
+    failedWrites.push(retry)
+    set({ syncError: { offline: apiFailure(error).kind === "network" } })
+  }
+
+  /**
+   * Saves a change that is already on screen. In guest mode the snapshot subscription below has
+   * stored it; in account mode the request runs and the server's version of the trip is applied.
+   */
+  function persist(tripId: string | null, write: () => Promise<TripReducer | null | void>) {
+    const started = epoch
+    write()
+      .then((reducer) => {
+        if (started === epoch && reducer && tripId) updateTrip(tripId, reducer)
+      })
+      .catch((error: unknown) => {
+        if (started === epoch) failSync(error, () => persist(tripId, write))
+      })
+  }
+
+  function persistSettings() {
+    if (repository.mode !== "account") return
+    persist(null, async () => {
+      const { lang, dark } = get()
+      await saveAccountSettings({ language: lang, theme: dark ? "dark" : "light" })
+    })
+  }
+
+  function currentTrip(id: string) {
+    return get().trips.find((trip) => trip.id === id) ?? null
+  }
+
+  function finishReply(id: string, failed: boolean) {
+    set((state) => ({
+      pendingItineraryIds: state.pendingItineraryIds.filter((item) => item !== id),
+      failedItineraryIds: failed
+        ? state.failedItineraryIds.includes(id)
+          ? state.failedItineraryIds
+          : [...state.failedItineraryIds, id]
+        : state.failedItineraryIds.filter((item) => item !== id),
+    }))
+  }
+
+  return {
+    hasHydrated: false,
+    mode: "guest",
+    lang: systemLang(),
+    dark: prefersDark(),
+    langChosen: false,
+    darkChosen: false,
+    trips: [],
+    activeId: null,
+    pendingItineraryIds: [],
+    failedItineraryIds: [],
+    syncError: null,
+
+    enterGuest: () => {
+      resetRequests()
+      repository = guestRepository
+      const snapshot = readGuestSnapshot()
+      const lang = snapshot.lang ?? systemLang()
+      const dark = snapshot.dark ?? prefersDark()
+      applyDocumentPreferences(lang, dark)
+      // Mode and data change in one update, so account trips are never written to guest storage.
+      loadingGuestData = true
+      set({
+        mode: "guest",
+        hasHydrated: true,
+        trips: snapshot.trips,
+        activeId: snapshot.activeId,
+        lang,
+        dark,
+        langChosen: snapshot.lang !== undefined,
+        darkChosen: snapshot.dark !== undefined,
+        pendingItineraryIds: [],
+        failedItineraryIds: [],
+        syncError: null,
+      })
+      loadingGuestData = false
     },
-  ),
-)
+
+    enterAccount: (settings, trips) => {
+      resetRequests()
+      repository = createAccountTripRepository()
+      const dark = settings.theme === "dark"
+      applyDocumentPreferences(settings.language, dark)
+      set({
+        mode: "account",
+        hasHydrated: true,
+        trips,
+        activeId: trips[0]?.id ?? null,
+        lang: settings.language,
+        dark,
+        // Account settings are explicit choices: they no longer follow the system.
+        langChosen: true,
+        darkChosen: true,
+        pendingItineraryIds: [],
+        failedItineraryIds: [],
+        syncError: null,
+      })
+    },
+
+    suspend: () => {
+      resetRequests()
+      set({ hasHydrated: false })
+    },
+
+    setLang: (lang) => {
+      set({ lang, langChosen: true })
+      persistSettings()
+    },
+    setDark: (dark) => {
+      set({ dark, darkChosen: true })
+      persistSettings()
+    },
+    followSystemLang: () => {
+      const state = get()
+      const lang = systemLang()
+      if (state.langChosen || state.lang === lang) return
+      set({ lang })
+    },
+    followSystemDark: () => {
+      const state = get()
+      const dark = prefersDark()
+      if (state.darkChosen || state.dark === dark) return
+      set({ dark })
+    },
+
+    createTrip: () => {
+      const trip: Trip = {
+        id: crypto.randomUUID(),
+        name: "",
+        details: { cityId: null, start: null, end: null, hotel: "", prefs: "" },
+        place: null,
+        messages: null,
+        hints: [],
+        plans: [],
+        conversationContext: null,
+      }
+      set((state) => ({ trips: [trip, ...state.trips], activeId: trip.id }))
+      persist(trip.id, () => repository.createTrip(trip))
+    },
+    selectTrip: (id) => set({ activeId: id }),
+    renameTrip: (id, name) => {
+      const trimmed = name.trim()
+      if (!trimmed) return
+      updateTrip(id, (trip) => ({ ...trip, name: trimmed }))
+      persist(id, async () => {
+        const trip = currentTrip(id)
+        return trip ? repository.renameTrip(trip) : null
+      })
+    },
+    deleteTrip: (id) => {
+      invalidateReply(id)
+      set((state) => {
+        const trips = state.trips.filter((trip) => trip.id !== id)
+        const activeId = state.activeId === id ? (trips[0]?.id ?? null) : state.activeId
+        return { trips, activeId }
+      })
+      persist(null, () => repository.deleteTrip(id))
+    },
+    saveTrip: (id, value) => {
+      const trip = currentTrip(id)
+      if (!trip) return
+      // A change to a trip with a conversation is shown as a notice and answered by the assistant;
+      // the instruction for the model is written by the server from `update`.
+      const update = trip.messages !== null ? tripUpdate(trip.details, value.details) : null
+      if (update) invalidateReply(id)
+      const notice: ChatMessage | null = update ? { id: crypto.randomUUID(), role: "system", text: "", update } : null
+      updateTrip(id, (current) => {
+        const messages = current.messages ?? []
+        return { ...current, place: value.place, details: value.details, messages: notice ? [...messages, notice] : messages }
+      })
+      persist(id, async () => {
+        const current = currentTrip(id)
+        return current ? repository.saveTrip(current) : null
+      })
+    },
+    sendMessage: (id, text) => {
+      const trimmed = text.trim()
+      if (!trimmed) return
+      const message: ChatMessage = { id: crypto.randomUUID(), role: "user", text: trimmed }
+      // Stored with the reply request: the account API saves it before asking the model.
+      updateTrip(id, (trip) => ({ ...trip, messages: [...(trip.messages ?? []), message] }))
+    },
+
+    requestReply: (id) => {
+      const state = get()
+      const trip = currentTrip(id)
+      if (!trip || trip.messages === null || !needsReply(trip.messages) || repliesInFlight.has(id)) return
+      if (!trip.place) {
+        finishReply(id, true)
+        return
+      }
+      repliesInFlight.add(id)
+      const token = replyToken(id)
+      const started = epoch
+      const current = () => started === epoch && replyToken(id) === token
+      set((value) => ({
+        pendingItineraryIds: value.pendingItineraryIds.includes(id) ? value.pendingItineraryIds : [...value.pendingItineraryIds, id],
+        failedItineraryIds: value.failedItineraryIds.filter((item) => item !== id),
+      }))
+
+      repository
+        .requestReply(trip, state.lang)
+        .then((reducer) => {
+          if (!current()) return
+          repliesInFlight.delete(id)
+          updateTrip(id, reducer)
+          finishReply(id, false)
+        })
+        .catch(async (error: unknown) => {
+          if (!current()) return
+          if (isUnauthorized(error)) onUnauthorized()
+          if (failureCode(error) === "trip_changed") {
+            // Edited elsewhere while the model was answering: take the stored trip; if it still
+            // needs a reply, the chat asks again.
+            try {
+              const reducer = await repository.reloadTrip(id)
+              if (!current()) return
+              repliesInFlight.delete(id)
+              if (reducer) updateTrip(id, reducer)
+              finishReply(id, false)
+              return
+            } catch {
+              // Fall through to the retry state.
+            }
+          }
+          if (!current()) return
+          repliesInFlight.delete(id)
+          finishReply(id, true)
+        })
+    },
+
+    retrySync: () => {
+      const retries = failedWrites
+      failedWrites = []
+      set({ syncError: null })
+      for (const retry of retries) retry()
+    },
+  }
+})
+
+// Guest data is written to localStorage on every change, as the persist middleware did before.
+// Entering guest mode only reads: the stored data is rewritten on the first real change.
+useChatStore.subscribe((state, previous) => {
+  if (loadingGuestData || state.mode !== "guest" || !state.hasHydrated) return
+  if (previous.mode !== "guest" || !previous.hasHydrated) return
+  const unchanged =
+    state.trips === previous.trips &&
+    state.activeId === previous.activeId &&
+    state.lang === previous.lang &&
+    state.dark === previous.dark &&
+    state.langChosen === previous.langChosen &&
+    state.darkChosen === previous.darkChosen
+  if (!unchanged) writeGuestSnapshot(guestSnapshot(state))
+})

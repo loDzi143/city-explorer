@@ -1,4 +1,5 @@
 import type { PlaceCandidate, ResolvedPlace } from "@/modules/geocoding/geocoding.types"
+import { distanceMeters } from "@/shared/lib/geo"
 
 const MIN_RELEVANCE = 0.9
 const CLEAR_GAP = 0.12
@@ -62,17 +63,4 @@ function samePlace(left: PlaceCandidate, right: PlaceCandidate) {
   if (left.id === right.id) return true
   if (normalizeName(left.name) !== normalizeName(right.name)) return false
   return distanceMeters(left, right) <= SAME_PLACE_METERS
-}
-
-function distanceMeters(left: PlaceCandidate, right: PlaceCandidate) {
-  const earth = 6_371_000
-  const toRad = (degrees: number) => (degrees * Math.PI) / 180
-  const latitudeDelta = toRad(right.latitude - left.latitude)
-  const longitudeDelta = toRad(right.longitude - left.longitude)
-  const leftLatitude = toRad(left.latitude)
-  const rightLatitude = toRad(right.latitude)
-  const haversine =
-    Math.sin(latitudeDelta / 2) ** 2 +
-    Math.cos(leftLatitude) * Math.cos(rightLatitude) * Math.sin(longitudeDelta / 2) ** 2
-  return 2 * earth * Math.asin(Math.min(1, Math.sqrt(haversine)))
 }

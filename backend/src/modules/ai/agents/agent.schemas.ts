@@ -1,58 +1,39 @@
 import { z } from "zod"
 
-import { chatMessagesSchema } from "@/modules/ai/llm/chat.schemas"
+import { isRecord } from "@/shared/lib/is-record"
 
-import type { AgentResponse, ConversationContext, ItineraryDay, ItineraryPlace, TripAgentInput, TripSettingsUpdate } from "./agent.types"
+import type { AgentResponse, ConversationContext, ItineraryDay, ItineraryPlace, TripSettingsUpdate } from "./agent.types"
 
 const coordinatesSchema = z.object({
   latitude: z.number().finite().gte(-90).lte(90),
   longitude: z.number().finite().gte(-180).lte(180),
 })
 
+const MAX_DAYS = 120
+const MAX_PLACES_PER_DAY = 40
+const MAX_DESCRIPTION = 4_000
+const MAX_HINTS = 10
+const MAX_HINT = 200
+
 const itineraryPlaceSchema = z.object({
-  id: z.string().trim().min(1),
-  name: z.string().trim().min(1),
+  id: z.string().trim().min(1).max(200),
+  name: z.string().trim().min(1).max(300),
+  // An overlong description is cut, not a reason to lose the place.
   description: z
     .string()
-    .max(4_000)
     .optional()
-    .transform((value) => value ?? ""),
+    .transform((value) => (value ?? "").slice(0, MAX_DESCRIPTION)),
   coordinates: coordinatesSchema,
 })
 
 const messageSchema = z.string().trim().min(1).max(50_000)
-
-const destinationSchema = z.object({
-  city: z.string().trim().min(1).max(200),
-  country: z.string().trim().max(200),
-  latitude: z.number().finite().gte(-90).lte(90),
-  longitude: z.number().finite().gte(-180).lte(180),
-})
-
-const tripAgentBodySchema = z
-  .object({
-    messages: chatMessagesSchema,
-    destination: destinationSchema,
-  })
-  .refine((value) => value.messages[0]?.role === "system")
-
-export function parseTripAgentBody(payload: unknown): { ok: true; data: TripAgentInput } | { ok: false; error: string } {
-  const result = tripAgentBodySchema.safeParse(payload)
-  if (!result.success) {
-    const destination = result.error.issues.some((issue) => issue.path[0] === "destination")
-    if (destination) return { ok: false, error: "Destination is required" }
-    const tooLong = result.error.issues.some((issue) => issue.code === "too_big")
-    return { ok: false, error: tooLong ? "Message is too long" : "Message is required" }
-  }
-  return { ok: true, data: result.data }
-}
 
 export function parseAgentResponse(content: string): AgentResponse | null {
   const payload = jsonFromContent(content)
   if (!isRecord(payload)) return null
   const message = messageSchema.safeParse(payload.message)
   if (!message.success) return null
-  const days = Array.isArray(payload.days) ? payload.days.flatMap(readItineraryDay).slice(0, 120) : []
+  const days = readItineraryDays(payload.days)
   const hints = readHints(payload.hints)
   const settings = readSettings(payload.settings)
   const conversationContext = readConversationContext(payload.conversationContext)
@@ -63,10 +44,10 @@ export function parseAgentResponse(content: string): AgentResponse | null {
   return response
 }
 
-function readConversationContext(value: unknown): ConversationContext | null {
+export function readConversationContext(value: unknown): ConversationContext | null {
   if (!isRecord(value)) return null
   const text = (item: unknown) => (typeof item === "string" && item.trim() ? item.trim().slice(0, 1_000) : null)
-  const list = (items: unknown) => readHints(items).slice(0, 20).map((item) => item.slice(0, 1_000))
+  const list = (items: unknown) => readStrings(items).slice(0, 20).map((item) => item.slice(0, 1_000))
   return {
     activeTopic: text(value.activeTopic),
     pendingQuestion: text(value.pendingQuestion),
@@ -87,21 +68,46 @@ function readSettings(value: unknown): TripSettingsUpdate | null {
   return Object.keys(settings).length > 0 ? settings : null
 }
 
-function readHints(value: unknown): string[] {
+function readStrings(value: unknown): string[] {
   if (!Array.isArray(value)) return []
   return value.flatMap((item) => {
     if (typeof item !== "string") return []
-    const hint = item.trim()
-    return hint ? [hint] : []
+    const text = item.trim()
+    return text ? [text] : []
   })
 }
 
-function readItineraryDay(value: unknown): ItineraryDay[] {
-  if (!isRecord(value)) return []
+/** Suggested next messages: short, and only a handful fit under the chat input. */
+export function readHints(value: unknown): string[] {
+  return readStrings(value)
+    .slice(0, MAX_HINTS)
+    .map((hint) => hint.slice(0, MAX_HINT))
+}
+
+/**
+ * Reads itinerary days leniently: a malformed day or place is dropped instead of failing the whole
+ * plan. A date may appear once; the plan is addressed by date, so a repeated day would be unreachable.
+ */
+export function readItineraryDays(value: unknown): ItineraryDay[] {
+  if (!Array.isArray(value)) return []
+  const dates = new Set<string>()
+  const days: ItineraryDay[] = []
+  for (const item of value) {
+    const day = readItineraryDay(item)
+    if (!day || dates.has(day.date)) continue
+    dates.add(day.date)
+    days.push(day)
+    if (days.length === MAX_DAYS) break
+  }
+  return days
+}
+
+function readItineraryDay(value: unknown): ItineraryDay | null {
+  if (!isRecord(value)) return null
   const date = normalizeDate(value.date)
-  if (!date) return []
-  const places = Array.isArray(value.places) ? value.places.flatMap(readItineraryPlace).slice(0, 40) : []
-  return [{ date, places }]
+  if (!date) return null
+  const places = Array.isArray(value.places) ? value.places.flatMap(readItineraryPlace).slice(0, MAX_PLACES_PER_DAY) : []
+  return { date, places }
 }
 
 function readItineraryPlace(value: unknown): ItineraryPlace[] {
@@ -162,7 +168,7 @@ function parseJson(value: string): unknown {
   }
 }
 
-function normalizeDate(value: unknown) {
+export function normalizeDate(value: unknown) {
   if (typeof value !== "string") return null
   const trimmed = value.trim()
   const iso = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})/)
@@ -183,8 +189,4 @@ function isIsoDate(value: string) {
   if (!year || !month || !day) return false
   const date = new Date(Date.UTC(year, month - 1, day))
   return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null
 }

@@ -1,11 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
 
+import { SessionOverlays } from "@/app/routes/session-overlays"
 import { ChatI, Chev, Compass, MapI } from "@/components/icons"
+import { AccountError, AccountPanel, type AuthMode } from "@/features/auth"
 import { ChatView, Sidebar, TripForm, type TripTab } from "@/features/trips"
 import { MapDaySelect, MapView, type MapPlaceRequest } from "@/features/map"
 import { useMediaQuery } from "@/hooks/use-media-query"
 import { tr } from "@/lib/i18n"
 import { latestPlan, tripTitle, useChatStore } from "@/stores/chat-store"
+import { useSessionStore } from "@/stores/session-store"
 import { rangeLabel } from "@/utils/dates"
 import { tripPlace } from "@/utils/place"
 
@@ -26,11 +29,17 @@ export function WorkspacePage() {
   const deleteTrip = useChatStore((state) => state.deleteTrip)
   const saveTrip = useChatStore((state) => state.saveTrip)
   const sendMessage = useChatStore((state) => state.sendMessage)
-  const beginItinerary = useChatStore((state) => state.beginItinerary)
-  const finishItinerary = useChatStore((state) => state.finishItinerary)
-  const failItinerary = useChatStore((state) => state.failItinerary)
+  const requestReply = useChatStore((state) => state.requestReply)
   const pendingItineraryIds = useChatStore((state) => state.pendingItineraryIds)
   const failedItineraryIds = useChatStore((state) => state.failedItineraryIds)
+
+  const status = useSessionStore((state) => state.status)
+  const user = useSessionStore((state) => state.user)
+  const signingOut = useSessionStore((state) => state.signingOut)
+  const logout = useSessionStore((state) => state.logout)
+  const retrySession = useSessionStore((state) => state.retry)
+  const continueAsGuest = useSessionStore((state) => state.continueAsGuest)
+  const [authMode, setAuthMode] = useState<AuthMode | null>(null)
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => window.innerWidth < 1100)
   const [chatCollapsed, setChatCollapsed] = useState(false)
@@ -41,19 +50,10 @@ export function WorkspacePage() {
 
   const t = tr(lang)
   const chat = trips.find((item) => item.id === activeId) ?? null
-  const beginActiveItinerary = useCallback(() => (chat ? beginItinerary(chat.id) : null), [beginItinerary, chat])
-  const finishActiveItinerary = useCallback(
-    (text: string, token: number) => {
-      if (chat) finishItinerary(chat.id, text, token)
-    },
-    [chat, finishItinerary],
-  )
-  const failActiveItinerary = useCallback(
-    (token?: number) => {
-      if (chat) failItinerary(chat.id, token)
-    },
-    [chat, failItinerary],
-  )
+  const chatId = chat?.id ?? null
+  const requestActiveReply = useCallback(() => {
+    if (chatId) requestReply(chatId)
+  }, [chatId, requestReply])
   const place = useMemo(() => (chat ? tripPlace(chat) : null), [chat])
   const showForm = Boolean(chat && (chat.messages === null || editing))
   const mapFocus = useMemo(
@@ -114,7 +114,20 @@ export function WorkspacePage() {
     if (entered) setMobilePane(chatCollapsed ? "map" : "chat")
   }, [mobile, chatCollapsed])
 
-  if (!hydrated) return <div className="h-screen w-full bg-bg" />
+  if (status === "account-error") return <AccountError t={t} onRetry={() => void retrySession()} onGuest={continueAsGuest} />
+
+  if (!hydrated) {
+    return (
+      <div className="flex h-dvh w-full items-center justify-center bg-bg text-[14px] text-mute">
+        {status === "account-loading" && (
+          <span role="status" className="flex items-center gap-2.5">
+            <span className="size-4 animate-spin rounded-full border-2 border-line border-t-brand" aria-hidden="true" />
+            {t.loadingAccount}
+          </span>
+        )}
+      </div>
+    )
+  }
 
   const title = chat ? tripTitle(chat, t) : t.newTrip
 
@@ -159,6 +172,16 @@ export function WorkspacePage() {
         }}
         onLang={setLang}
         onDark={setDark}
+        account={
+          <AccountPanel
+            t={t}
+            user={status === "account" ? user : null}
+            collapsed={mobile ? false : sidebarCollapsed}
+            signingOut={signingOut}
+            onSignIn={() => setAuthMode("login")}
+            onSignOut={() => void logout()}
+          />
+        }
       />
       <main className={`min-h-0 min-w-0 flex-1 ${showHistory && mobile ? "hidden" : "flex"} ${mobile ? "" : "gap-3 p-3"}`}>
         <section
@@ -204,8 +227,8 @@ export function WorkspacePage() {
                 lang={lang}
                 editing={editing && chat.messages !== null}
                 onCancel={() => setEditing(false)}
-                onSubmit={(value, notice) => {
-                  saveTrip(chat.id, value, notice)
+                onSubmit={(value) => {
+                  saveTrip(chat.id, value)
                   setEditing(false)
                 }}
               />
@@ -229,9 +252,7 @@ export function WorkspacePage() {
                 onEdit={() => setEditing(true)}
                 itineraryPending={pendingItineraryIds.includes(chat.id)}
                 itineraryFailed={failedItineraryIds.includes(chat.id)}
-                onBeginItinerary={beginActiveItinerary}
-                onItinerary={finishActiveItinerary}
-                onItineraryError={failActiveItinerary}
+                onRequestReply={requestActiveReply}
               />
             ) : (
               <div className="flex h-full items-center justify-center overflow-y-auto px-4 py-6 md:px-6 md:py-8">
@@ -248,6 +269,14 @@ export function WorkspacePage() {
                   >
                     {t.newTrip}
                   </button>
+                  {status === "guest" && (
+                    <p className="mt-4 text-[13px] text-mute">
+                      {t.haveAccount}{" "}
+                      <button type="button" onClick={() => setAuthMode("login")} className="font-medium text-brand underline-offset-2 hover:underline">
+                        {t.signIn}
+                      </button>
+                    </p>
+                  )}
                 </div>
               </div>
             )}
@@ -258,7 +287,9 @@ export function WorkspacePage() {
           aria-hidden={!showMap}
           className={`relative h-full min-h-0 min-w-0 overflow-hidden ${showMap ? "flex-1" : "hidden"} ${mobile ? "w-full" : "rounded-2xl border border-line shadow-sm"}`}
         >
-          <MapView dark={dark} t={t} focus={mapFocus} day={selectedDate} stops={mapStops} openPlace={placeRequest} frameOffset={mobile ? 0 : undefined} />
+          <Suspense fallback={<div className="absolute inset-0 bg-sunk" aria-hidden="true" />}>
+            <MapView dark={dark} t={t} focus={mapFocus} day={selectedDate} stops={mapStops} openPlace={placeRequest} frameOffset={mobile ? 0 : undefined} />
+          </Suspense>
           {(mobile ? showMap : chatCollapsed) ? (
             <div className="absolute top-4 left-4 z-10 flex items-center gap-2">
               {mobile ? (
@@ -288,6 +319,7 @@ export function WorkspacePage() {
           )}
         </section>
       </main>
+      <SessionOverlays t={t} authMode={authMode} onAuthMode={setAuthMode} />
     </div>
   )
 }

@@ -3,6 +3,16 @@ import { useEffect, type ReactNode } from "react"
 
 import { queryClient } from "@/lib/query-client"
 import { useChatStore } from "@/stores/chat-store"
+import { useSessionStore } from "@/stores/session-store"
+
+/** Decides guest or account mode once at startup; the workspace stays hidden until then. */
+function SessionBootstrap() {
+  const initialize = useSessionStore((state) => state.initialize)
+  useEffect(() => {
+    void initialize()
+  }, [initialize])
+  return null
+}
 
 function DocumentPreferences() {
   const hydrated = useChatStore((state) => state.hasHydrated)
@@ -40,6 +50,7 @@ function DocumentPreferences() {
 export function AppProvider({ children }: { children: ReactNode }) {
   return (
     <QueryClientProvider client={queryClient}>
+      <SessionBootstrap />
       <DocumentPreferences />
       {children}
     </QueryClientProvider>

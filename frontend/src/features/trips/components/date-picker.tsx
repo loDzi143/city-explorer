@@ -38,7 +38,8 @@ export function DatePicker({
   t: Dict
   invalid?: boolean
 }) {
-  const today = toIso(new Date())
+  // Read once per mount: the calendar must not shift under the user if midnight passes while it is open.
+  const [today] = useState(() => toIso(new Date()))
   const now = parseIso(today)
   const minMonth = new Date(now.getFullYear(), now.getMonth(), 1)
   const maxMonth = new Date(now.getFullYear() + 1, 11, 1)

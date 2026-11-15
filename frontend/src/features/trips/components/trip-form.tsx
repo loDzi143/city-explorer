@@ -5,13 +5,13 @@ import { Compass, Pin } from "@/components/icons"
 import { Combobox, ComboboxContent, ComboboxEmpty, ComboboxInput, ComboboxItem, ComboboxList } from "@/components/ui/combobox"
 import { useDebounced } from "@/hooks/use-debounced"
 import type { Dict } from "@/lib/i18n"
-import type { SettingsNotice, Trip, TripSettings } from "@/types/chat"
+import type { Trip, TripSettings } from "@/types/chat"
 import type { Lang } from "@/types/lang"
 import type { Place } from "@/types/place"
+import { HOTEL_MAX, PREFS_MAX } from "@/utils/limits"
 import { tripPlace } from "@/utils/place"
 
 import { suggestLocations } from "../api/suggest-locations"
-import { settingsUpdateNotice } from "../utils/settings-update"
 import { DatePicker } from "./date-picker"
 
 function placeFromTrip(trip: Trip): Place | null {
@@ -40,7 +40,7 @@ export function TripForm({
   t: Dict
   lang: Lang
   editing?: boolean
-  onSubmit: (value: TripSettings, notice?: SettingsNotice | null) => void
+  onSubmit: (value: TripSettings) => void
   onCancel?: () => void
 }) {
   const [place, setPlace] = useState<Place | null>(() => placeFromTrip(trip))
@@ -74,7 +74,7 @@ export function TripForm({
     setTried(true)
     if (place && (editing || selected) && start && end) {
       const details = { cityId: place.id, start, end, hotel: hotel.trim(), prefs: prefs.trim() }
-      onSubmit({ place, details }, editing ? settingsUpdateNotice(current, details) : null)
+      onSubmit({ place, details })
     }
   }
 
@@ -180,7 +180,7 @@ export function TripForm({
               <span className="pointer-events-none absolute left-3.5 top-3 text-mute">
                 <Pin />
               </span>
-              <input id="hotel" value={hotel} onChange={(event) => setHotel(event.target.value)} placeholder={t.hotelPh} className={`${field} h-11 pl-10`} />
+              <input id="hotel" value={hotel} maxLength={HOTEL_MAX} onChange={(event) => setHotel(event.target.value)} placeholder={t.hotelPh} className={`${field} h-11 pl-10`} />
             </div>
             <p className="mt-1.5 text-xs text-mute">{t.hotelHelp}</p>
           </div>
@@ -193,6 +193,7 @@ export function TripForm({
               id="prefs"
               rows={3}
               value={prefs}
+              maxLength={PREFS_MAX}
               onChange={(event) => setPrefs(event.target.value)}
               placeholder={t.prefsPh}
               className={`${field} resize-none py-3 leading-relaxed`}

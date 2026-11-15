@@ -1,60 +1,17 @@
 import { useCallback, useEffect } from "react"
 
 import type { Trip } from "@/types/chat"
-import type { Lang } from "@/types/lang"
+import { needsReply } from "@/utils/trip-messages"
 
-import { chatLlm } from "../api/chat-llm"
-import { chatRequest } from "../utils/chat-request"
-
-function needsReply(trip: Trip) {
-  const messages = trip.messages
-  if (!messages) return false
-  if (messages.length === 0) return true
-  const role = messages[messages.length - 1]?.role
-  return role === "user" || role === "system"
-}
-
-export function useChatReply({
-  trip,
-  lang,
-  enabled,
-  onBegin,
-  onFinish,
-  onError,
-}: {
-  trip: Trip
-  lang: Lang
-  enabled: boolean
-  onBegin: () => number | null
-  onFinish: (text: string, token: number) => void
-  onError: (token?: number) => void
-}) {
+/** Asks for the assistant reply whenever the trip has something unanswered; `retry` asks again after a failure. */
+export function useChatReply({ trip, enabled, onRequest }: { trip: Trip; enabled: boolean; onRequest: () => void }) {
   const send = useCallback(() => {
-    if (!enabled || !needsReply(trip)) return
-    const place = trip.place
-    if (!place) {
-      onError()
-      return
-    }
-    const token = onBegin()
-    if (token == null) return
-    chatLlm(chatRequest(trip, lang), {
-      city: place.city,
-      country: place.country,
-      latitude: place.latitude,
-      longitude: place.longitude,
-    })
-      .then((reply) => onFinish(JSON.stringify(reply), token))
-      .catch(() => onError(token))
-  }, [trip, enabled, lang, onBegin, onError, onFinish])
+    if (enabled && trip.messages && needsReply(trip.messages)) onRequest()
+  }, [trip, enabled, onRequest])
 
   useEffect(() => {
     send()
   }, [send])
 
-  const retry = useCallback(() => {
-    send()
-  }, [send])
-
-  return { retry }
+  return { retry: send }
 }

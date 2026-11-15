@@ -4,11 +4,11 @@ import { Settings } from "@/components/icons"
 import type { Dict } from "@/lib/i18n"
 import type { ChatMessage } from "@/types/chat"
 import { rangeLabel } from "@/utils/dates"
+import { messageUpdate } from "@/utils/trip-update"
 
-import { parseSettingsUpdate } from "../utils/settings-update"
 
 export function SettingsNotice({ message, t }: { message: ChatMessage; t: Dict }) {
-  const update = message.update ?? parseSettingsUpdate(message.text)
+  const update = messageUpdate(message)
   if (!update) return null
 
   const value = (text: string | null) => (text ? text : <span className="text-mute">{t.notSet}</span>)

@@ -17,7 +17,7 @@ export function createGeocodingService(provider: GeocodingProvider = mapTilerPro
       })
       const parsed = parseLocationSuggestions(suggestions)
       if (!parsed) {
-        throw new AppError("Geocoding response is invalid", 502, "Geocoding is unavailable")
+        throw new AppError("Geocoding response is invalid", 502, "Geocoding is unavailable", "geocoding_unavailable")
       }
       return parsed
     },
@@ -27,7 +27,7 @@ export function createGeocodingService(provider: GeocodingProvider = mapTilerPro
       const batches = await provider.geocodePlaces(input)
       const parsed = parsePlaceCandidateBatches(batches)
       if (!parsed || parsed.length !== input.places.length) {
-        throw new AppError("Geocoding response is invalid", 502, "Geocoding is unavailable")
+        throw new AppError("Geocoding response is invalid", 502, "Geocoding is unavailable", "geocoding_unavailable")
       }
       return parsed.map((candidates, index) => resolvePlace(queryName(input.places[index]), candidates))
     },

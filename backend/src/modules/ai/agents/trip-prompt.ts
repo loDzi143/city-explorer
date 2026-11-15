@@ -1,66 +1,63 @@
-import type { ConversationContext, Trip } from "@/types/chat"
-import type { Lang } from "@/types/lang"
+import type { Language } from "@/shared/types/language"
 
-const responseLanguage: Record<Lang, string> = {
+import type { ConversationContext, TripChatState, TripSettingsChange } from "./agent.types"
+
+const responseLanguage: Record<Language, string> = {
   en: "English",
   ru: "русский",
+}
+
+const missing = "Not specified"
+
+/**
+ * Text typed by the user (or sent by a guest's browser) that becomes one line of the prompt. Line
+ * breaks are folded into spaces: the prompt is structured by lines and headings, and a value must
+ * not be able to start a section of its own and pose as instructions.
+ */
+function inline(value: string) {
+  return value.replace(/\s+/g, " ").trim()
 }
 
 /**
  * The latest saved plan. Earlier assistant messages may hold outdated days,
  * so the current plan is always passed explicitly.
  */
-function currentItinerary(trip: Trip) {
-  const plan = trip.plans.at(-1);
-  if (!plan || plan.days.length === 0) {
-    return "No itinerary exists yet for this trip.";
+function currentItinerary(state: TripChatState) {
+  const days = state.plan?.days ?? []
+  if (days.length === 0) {
+    return "No itinerary exists yet for this trip."
   }
   return [
     "This is the current saved itinerary. It is the source of truth: if earlier messages in the conversation contain a different itinerary, use this one.",
     "Preserve its days, places, and place IDs unless the user's request or a trip settings change requires modifying them.",
     "",
-    JSON.stringify({ days: plan.days }),
-  ].join("\n");
+    JSON.stringify({ days }),
+  ].join("\n")
 }
 
-export interface PromptContext {
-  isInitialRequest: boolean;
-  conversationContext?: ConversationContext | null;
+export type PromptContext = {
+  isInitialRequest: boolean
+  conversationContext?: ConversationContext | null
 }
 
-export function systemPrompt(
-  trip: Trip,
-  lang: Lang,
-  context: PromptContext
-) {
-  const missing = "Not specified";
+/**
+ * The system prompt for the trip assistant. It is built only here, from the trip state the server
+ * trusts: the client never sends instructions for the model.
+ */
+export function tripSystemPrompt(state: TripChatState, lang: Language, context: PromptContext) {
+  const { destination } = state
+  const { start, end } = state.details
 
-  const place = trip.place;
-  const { start, end } = trip.details;
+  const city = [destination.city, destination.country].map(inline).filter(Boolean).join(", ") || missing
+  const coordinates = `${destination.latitude}, ${destination.longitude}`
+  const dateRange = start && end ? `${start} – ${end}` : missing
+  const hotel = inline(state.details.hotel) || missing
+  const preferences = inline(state.details.prefs) || missing
 
-  const city = place
-    ? [place.city, place.country].filter(Boolean).join(", ")
-    : missing;
+  const language = responseLanguage[lang]
+  const itinerary = currentItinerary(state)
 
-  const coordinates = place
-    ? `${place.latitude}, ${place.longitude}`
-    : missing;
-
-  const dateRange =
-    start && end
-      ? `${start} – ${end}`
-      : missing;
-
-  const hotel = trip.details.hotel.trim() || missing;
-  const preferences = trip.details.prefs.trim() || missing;
-
-  const language = responseLanguage[lang];
-  const itinerary = currentItinerary(trip);
-
-  const conversationContext =
-    context.conversationContext
-      ? JSON.stringify(context.conversationContext, null, 2)
-      : "None";
+  const conversationContext = context.conversationContext ? JSON.stringify(context.conversationContext, null, 2) : "None"
 
   return `
 
@@ -1135,6 +1132,25 @@ If no destination or trip dates are available, use hints that help the user prov
 - Never store the full conversation history in conversationContext.
 - Never preserve obsolete or already resolved conversational details in conversationContext.
 
-`;
+`
 }
 
+const datesLine = "- Trip dates: "
+const hotelLine = "- Accommodation: "
+const prefsLine = "- User preferences: "
+
+/** Instruction sent with role "system" when the user changed trip settings in the form. */
+export function settingsUpdateInstruction(update: TripSettingsChange) {
+  const lines: string[] = []
+  if (update.dates) {
+    const { start, end } = update.dates
+    lines.push(`${datesLine}${start && end ? `${start} – ${end}` : missing}`)
+  }
+  if (update.hotel !== undefined) lines.push(`${hotelLine}${inline(update.hotel) || missing}`)
+  if (update.prefs !== undefined) lines.push(`${prefsLine}${inline(update.prefs) || missing}`)
+  return [
+    "The user has updated their trip settings:",
+    ...lines,
+    "Use the updated details when continuing to plan or modify the trip. Reconsider affected recommendations and itinerary items if necessary. Preserve existing itinerary elements that are not affected by these changes.",
+  ].join("\n")
+}

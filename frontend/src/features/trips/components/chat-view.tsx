@@ -5,7 +5,9 @@ import type { Dict } from "@/lib/i18n"
 import type { Trip } from "@/types/chat"
 import type { Lang } from "@/types/lang"
 import { rangeLabel } from "@/utils/dates"
+import { USER_MESSAGE_MAX } from "@/utils/limits"
 import { tripPlace } from "@/utils/place"
+import { needsReply } from "@/utils/trip-messages"
 
 import { useChatReply } from "../hooks/use-chat-reply"
 import { assistantMessage } from "../utils/assistant-message"
@@ -39,9 +41,7 @@ export function ChatView({
   onEdit,
   itineraryPending,
   itineraryFailed,
-  onBeginItinerary,
-  onItinerary,
-  onItineraryError,
+  onRequestReply,
 }: {
   trip: Trip
   t: Dict
@@ -56,25 +56,14 @@ export function ChatView({
   onEdit: () => void
   itineraryPending: boolean
   itineraryFailed: boolean
-  onBeginItinerary: () => number | null
-  onItinerary: (text: string, token: number) => void
-  onItineraryError: (token?: number) => void
+  onRequestReply: () => void
 }) {
   const [draft, setDraft] = useState("")
   const scroller = useRef<HTMLDivElement>(null)
   const city = tripPlace(trip)
   const messages = trip.messages ?? []
-  const lastRole = messages[messages.length - 1]?.role
-  const expectingReply = messages.length === 0 || lastRole === "user" || lastRole === "system"
-  const typing = !itineraryFailed && (itineraryPending || expectingReply)
-  const { retry } = useChatReply({
-    trip,
-    lang,
-    enabled: Boolean(city),
-    onBegin: onBeginItinerary,
-    onFinish: onItinerary,
-    onError: onItineraryError,
-  })
+  const typing = !itineraryFailed && (itineraryPending || needsReply(messages))
+  const { retry } = useChatReply({ trip, enabled: Boolean(city), onRequest: onRequestReply })
 
   // Opening the chat (tab switch or another trip) jumps to the bottom before paint;
   // new messages while the chat is open scroll smoothly.
@@ -206,6 +195,7 @@ export function ChatView({
           <textarea
             rows={1}
             value={draft}
+            maxLength={USER_MESSAGE_MAX}
             disabled={typing}
             onChange={(event) => setDraft(event.target.value)}
             placeholder={t.placeholder}

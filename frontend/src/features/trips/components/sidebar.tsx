@@ -52,6 +52,7 @@ export function Sidebar({
   onDelete,
   onLang,
   onDark,
+  account,
 }: {
   t: Dict
   lang: Lang
@@ -68,6 +69,8 @@ export function Sidebar({
   onDelete: (id: string) => void
   onLang: (lang: Lang) => void
   onDark: (dark: boolean) => void
+  /** Account status and sign-in / sign-out, shown at the bottom of the footer. */
+  account?: ReactNode
 }) {
   const [menu, setMenu] = useState<string | null>(null)
   const [renaming, setRenaming] = useState<string | null>(null)
@@ -240,6 +243,7 @@ export function Sidebar({
             />
           </>
         )}
+        {account}
       </div>
     </aside>
   )

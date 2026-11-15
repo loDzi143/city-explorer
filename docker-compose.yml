@@ -1,0 +1,21 @@
+# Local PostgreSQL for development. Credentials match backend/.env.example; don't reuse them in production.
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: city_explorer
+      POSTGRES_PASSWORD: city_explorer
+      POSTGRES_DB: city_explorer
+    ports:
+      # Loopback only: the development password must not be reachable from the network.
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U city_explorer -d city_explorer"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  db-data:
