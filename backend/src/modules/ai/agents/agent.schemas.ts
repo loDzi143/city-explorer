@@ -2,7 +2,7 @@ import { z } from "zod"
 
 import { chatMessagesSchema } from "@/modules/ai/llm/chat.schemas"
 
-import type { AgentResponse, ItineraryDay, ItineraryPlace, TripAgentInput, TripSettingsUpdate } from "./agent.types"
+import type { AgentResponse, ConversationContext, ItineraryDay, ItineraryPlace, TripAgentInput, TripSettingsUpdate } from "./agent.types"
 
 const coordinatesSchema = z.object({
   latitude: z.number().finite().gte(-90).lte(90),
@@ -55,10 +55,24 @@ export function parseAgentResponse(content: string): AgentResponse | null {
   const days = Array.isArray(payload.days) ? payload.days.flatMap(readItineraryDay).slice(0, 120) : []
   const hints = readHints(payload.hints)
   const settings = readSettings(payload.settings)
+  const conversationContext = readConversationContext(payload.conversationContext)
   const response: AgentResponse = { message: message.data, days }
   if (hints.length > 0) response.hints = hints
+  if (conversationContext) response.conversationContext = conversationContext
   if (settings) response.settings = settings
   return response
+}
+
+function readConversationContext(value: unknown): ConversationContext | null {
+  if (!isRecord(value)) return null
+  const text = (item: unknown) => (typeof item === "string" && item.trim() ? item.trim().slice(0, 1_000) : null)
+  const list = (items: unknown) => readHints(items).slice(0, 20).map((item) => item.slice(0, 1_000))
+  return {
+    activeTopic: text(value.activeTopic),
+    pendingQuestion: text(value.pendingQuestion),
+    discussedOptions: list(value.discussedOptions),
+    unresolvedReferences: list(value.unresolvedReferences),
+  }
 }
 
 function readSettings(value: unknown): TripSettingsUpdate | null {

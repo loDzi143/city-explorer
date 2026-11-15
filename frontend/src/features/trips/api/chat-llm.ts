@@ -23,6 +23,14 @@ const agentResponseSchema = z.object({
     }),
   ),
   hints: z.preprocess(hintStrings, z.array(z.string()).optional()),
+  conversationContext: z
+    .object({
+      activeTopic: z.string().nullable(),
+      pendingQuestion: z.string().nullable(),
+      discussedOptions: z.array(z.string()),
+      unresolvedReferences: z.array(z.string()),
+    })
+    .optional(),
   settings: z
     .object({
       start: z.string().optional(),

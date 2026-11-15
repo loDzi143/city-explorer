@@ -4,7 +4,7 @@ import type { Trip } from "@/types/chat"
 import type { Lang } from "@/types/lang"
 
 import { chatLlm } from "../api/chat-llm"
-import { chatHistory } from "../utils/chat-history"
+import { chatRequest } from "../utils/chat-request"
 
 function needsReply(trip: Trip) {
   const messages = trip.messages
@@ -38,7 +38,7 @@ export function useChatReply({
     }
     const token = onBegin()
     if (token == null) return
-    chatLlm(chatHistory(trip, lang), {
+    chatLlm(chatRequest(trip, lang), {
       city: place.city,
       country: place.country,
       latitude: place.latitude,

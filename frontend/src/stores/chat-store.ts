@@ -1,7 +1,7 @@
 import { create } from "zustand"
 import { createJSONStorage, persist } from "zustand/middleware"
 
-import type { ChatMessage, SettingsNotice, Trip, TripDay, TripDetails, TripPlan, TripSettings, TripUpdate } from "@/types/chat"
+import type { ChatMessage, ConversationContext, SettingsNotice, Trip, TripDay, TripDetails, TripPlan, TripSettings, TripUpdate } from "@/types/chat"
 import type { Lang } from "@/types/lang"
 import { isPlace, tripPlace } from "@/utils/place"
 
@@ -136,6 +136,7 @@ function parseTrip(value: unknown): Trip | null {
     messages,
     hints: readHints(trip.hints),
     plans: readPlans(trip.plans),
+    conversationContext: readConversationContext(trip.conversationContext),
   }
 }
 
@@ -155,6 +156,7 @@ function parseLegacyChat(value: unknown): Trip | null {
     messages,
     hints: readHints(chat.hints),
     plans: days.length > 0 ? [{ date: new Date().toISOString(), start: details.start, end: details.end, days }] : [],
+    conversationContext: null,
   }
 }
 
@@ -221,18 +223,43 @@ function readHints(value: unknown): string[] {
   })
 }
 
+function readConversationContext(value: unknown): ConversationContext | null {
+  if (!value || typeof value !== "object") return null
+  const raw = value as Partial<Record<keyof ConversationContext, unknown>>
+  const text = (item: unknown) => (typeof item === "string" && item.trim() ? item.trim() : null)
+  return {
+    activeTopic: text(raw.activeTopic),
+    pendingQuestion: text(raw.pendingQuestion),
+    discussedOptions: readHints(raw.discussedOptions),
+    unresolvedReferences: readHints(raw.unresolvedReferences),
+  }
+}
+
 type ReplySettings = Partial<Pick<TripDetails, "start" | "end" | "hotel" | "prefs">>
 
-function parseReply(text: string): { days: TripDay[]; hints: string[]; settings: ReplySettings | null } {
+type ParsedReply = {
+  days: TripDay[]
+  hints: string[]
+  settings: ReplySettings | null
+  conversationContext: ConversationContext | null
+}
+
+function parseReply(text: string): ParsedReply {
+  const empty: ParsedReply = { days: [], hints: [], settings: null, conversationContext: null }
   let payload: unknown
   try {
     payload = JSON.parse(text)
   } catch {
-    return { days: [], hints: [], settings: null }
+    return empty
   }
-  if (!payload || typeof payload !== "object") return { days: [], hints: [], settings: null }
-  const reply = payload as { days?: unknown; hints?: unknown; settings?: unknown }
-  return { days: readTripDays(reply.days), hints: readHints(reply.hints), settings: readReplySettings(reply.settings) }
+  if (!payload || typeof payload !== "object") return empty
+  const reply = payload as { days?: unknown; hints?: unknown; settings?: unknown; conversationContext?: unknown }
+  return {
+    days: readTripDays(reply.days),
+    hints: readHints(reply.hints),
+    settings: readReplySettings(reply.settings),
+    conversationContext: readConversationContext(reply.conversationContext),
+  }
 }
 
 function readReplySettings(value: unknown): ReplySettings | null {
@@ -330,6 +357,7 @@ export const useChatStore = create<ChatState>()(
           messages: null,
           hints: [],
           plans: [],
+          conversationContext: null,
         }
         set((state) => ({ trips: [trip, ...state.trips], activeId: trip.id }))
       },
@@ -397,7 +425,7 @@ export const useChatStore = create<ChatState>()(
           role: "ai",
           text,
         }
-        const { days, hints, settings } = parseReply(text)
+        const { days, hints, settings, conversationContext } = parseReply(text)
         set((state) => ({
           pendingItineraryIds: state.pendingItineraryIds.filter((item) => item !== id),
           failedItineraryIds: state.failedItineraryIds.filter((item) => item !== id),
@@ -416,6 +444,8 @@ export const useChatStore = create<ChatState>()(
               messages: [...trip.messages, reply],
               plans: plan ? [...trip.plans, plan] : trip.plans,
               hints,
+              // A reply without a context keeps the previous one.
+              conversationContext: conversationContext ?? trip.conversationContext,
             }
           }),
         }))

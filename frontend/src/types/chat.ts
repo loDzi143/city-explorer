@@ -52,6 +52,14 @@ export type TripPlan = {
   days: TripDay[]
 }
 
+/** Short conversational memory the model returns with every reply and gets back on the next request. */
+export type ConversationContext = {
+  activeTopic: string | null
+  pendingQuestion: string | null
+  discussedOptions: string[]
+  unresolvedReferences: string[]
+}
+
 export type Trip = {
   id: string
   name: string
@@ -60,6 +68,8 @@ export type Trip = {
   messages: ChatMessage[] | null
   hints: string[]
   plans: TripPlan[]
+  /** Latest conversationContext from the model, null before the first reply. */
+  conversationContext: ConversationContext | null
 }
 
 export type TripSettings = {
